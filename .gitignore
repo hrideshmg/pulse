@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+bun.lock
+dist/
+.env
+local.properties
+**/build/
+*.iml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Compiled documents
+*.pdf
+*.aux
+*.log
+*.out
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Skills lock (auto-generated)
+skills-lock.json
+
+
+# Upskill reports (personal output)
+upskill/*.md
+
+# Agent skills: track the source, ignore only deps and logs.
+# (A blanket `.agents/` ignore silently drops the job-search CLI skills from the repo.)
+.agents/**/node_modules/
+.agents/**/*.log
+.agents/usage/
+playwright-cli
