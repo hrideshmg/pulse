@@ -6,10 +6,12 @@ import { loadRuntimeConfig, type RuntimeConfig } from '../config.js';
 import { pulseEventSchema, type EventAcknowledgement } from '../contracts/events.js';
 import { sessionStatusSchema } from '../contracts/domain.js';
 import { sessionSearchInputSchema } from '../contracts/session-search.js';
+import { backendHapticRequestSchema, backendWhisperRequestSchema } from '../contracts/interventions.js';
 import { currentStressResponseSchema, currentVitalsResponseSchema } from '../contracts/vitals-resources.js';
 import { localHealth } from '../health.js';
 import { StructuredLogger } from '../observability/logger.js';
 import { EventStore } from './event-store.js';
+import { DeviceActions } from './device-actions.js';
 
 const MAX_BODY_BYTES = 1_000_000;
 const VITAL_STALE_AFTER_MS = 10_000;
@@ -19,15 +21,17 @@ export interface Backend {
   store: EventStore;
   logger: StructuredLogger;
   websocketServer: WebSocketServer;
+  deviceActions: DeviceActions;
 }
 
 export function createBackend(config: RuntimeConfig = loadRuntimeConfig()): Backend {
   const logger = new StructuredLogger('backend', config.LOG_LEVEL);
   const store = new EventStore(logger, config.DATABASE_PATH);
+  const deviceActions = new DeviceActions(store, config);
   const websocketServer = new WebSocketServer({ noServer: true });
   const server = createServer(async (request, response) => {
     try {
-      await route(request, response, store, config, logger);
+      await route(request, response, store, deviceActions, config, logger);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown backend error';
       logger.error('Request failed', { boundary: 'http', error: message });
@@ -46,12 +50,18 @@ export function createBackend(config: RuntimeConfig = loadRuntimeConfig()): Back
       websocketServer.emit('connection', websocket, request);
     });
   });
-  websocketServer.on('connection', (socket) => handleSessionStream(socket, store, logger));
-  server.on('close', () => store.close());
-  return { server, store, logger, websocketServer };
+  websocketServer.on('connection', (socket) => {
+    deviceActions.addSocket(socket);
+    handleSessionStream(socket, store, deviceActions, logger);
+  });
+  server.on('close', () => {
+    deviceActions.close();
+    store.close();
+  });
+  return { server, store, logger, websocketServer, deviceActions };
 }
 
-function handleSessionStream(socket: WebSocket, store: EventStore, logger: StructuredLogger): void {
+function handleSessionStream(socket: WebSocket, store: EventStore, deviceActions: DeviceActions, logger: StructuredLogger): void {
   logger.info('Persistent session connection opened', { boundary: 'phone_to_backend_stream' });
   socket.on('message', (data) => {
     const raw = data.toString();
@@ -64,6 +74,7 @@ function handleSessionStream(socket: WebSocket, store: EventStore, logger: Struc
         correlationId: event.correlationId,
         eventType: event.type
       });
+      deviceActions.beforeIngest(event);
       socket.send(JSON.stringify(store.ingest(event)));
     } catch (error) {
       const acknowledgement: EventAcknowledgement = {
@@ -94,6 +105,7 @@ async function route(
   request: IncomingMessage,
   response: ServerResponse,
   store: EventStore,
+  deviceActions: DeviceActions,
   config: RuntimeConfig,
   logger: StructuredLogger
 ): Promise<void> {
@@ -113,6 +125,7 @@ async function route(
       correlationId: event.correlationId,
       eventType: event.type
     });
+    deviceActions.beforeIngest(event);
     sendJson(response, 202, store.ingest(event));
     return;
   }
@@ -184,6 +197,18 @@ async function route(
     return;
   }
 
+  if (request.method === 'POST' && url.pathname === '/v1/sessions/current/interventions/haptic') {
+    const input = backendHapticRequestSchema.parse(await readJson(request));
+    sendJson(response, 200, deviceActions.haptic(input));
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/v1/sessions/current/interventions/whisper') {
+    const input = backendWhisperRequestSchema.parse(await readJson(request));
+    sendJson(response, 200, deviceActions.whisper(input));
+    return;
+  }
+
   const transcriptMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/transcript$/);
   if (request.method === 'GET' && transcriptMatch) {
     const sessionId = decodeURIComponent(transcriptMatch[1]);
@@ -198,6 +223,14 @@ async function route(
     const sessionId = decodeURIComponent(eventMatch[1]);
     if (!store.getSession(sessionId)) throw new Error(`Unknown session: ${sessionId}`);
     sendJson(response, 200, { sessionId, events: store.getEvents(sessionId) });
+    return;
+  }
+
+  const interventionsMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/interventions$/);
+  if (request.method === 'GET' && interventionsMatch) {
+    const sessionId = decodeURIComponent(interventionsMatch[1]);
+    if (!store.getSession(sessionId)) throw new Error(`Unknown session: ${sessionId}`);
+    sendJson(response, 200, { sessionId, interventions: store.getInterventions(sessionId) });
     return;
   }
 

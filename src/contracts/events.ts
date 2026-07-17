@@ -72,11 +72,16 @@ export const playbackCompletedEventSchema = event('playback_completed', z.object
   commandId: id,
   result: z.enum(['played', 'cancelled', 'failed'])
 }).strict());
+export const hapticCompletedEventSchema = event('haptic_completed', z.object({
+  commandId: id,
+  result: z.enum(['delivered', 'cancelled', 'failed'])
+}).strict());
 
 export const playTtsEventSchema = event('play_tts', z.object({
   commandId: id,
-  text: z.string().min(1).max(500),
-  expiresAt: timestamp
+  text: z.string().min(1),
+  expiresAt: timestamp,
+  capturePolicy: z.literal('pause')
 }).strict());
 export const cancelTtsEventSchema = event('cancel_tts', z.object({ commandId: id }).strict());
 export const sendWatchHapticEventSchema = event('send_watch_haptic', hapticCommandEventSchema.shape.payload);
@@ -98,6 +103,7 @@ export const pulseEventSchema = z.discriminatedUnion('type', [
   audioRouteChangedEventSchema,
   consentUpdatedEventSchema,
   playbackCompletedEventSchema,
+  hapticCompletedEventSchema,
   playTtsEventSchema,
   cancelTtsEventSchema,
   sendWatchHapticEventSchema,

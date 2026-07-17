@@ -1,8 +1,9 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
-import type { ConsentGrant, ConsentScope, Session, SessionContext, SpeechMetricSnapshot, StressSignal, TranscriptSegment, VitalSample } from '../contracts/domain.js';
-import { sessionContextSchema, sessionSchema, transcriptSegmentSchema, vitalSampleSchema } from '../contracts/domain.js';
+import type { ConsentGrant, ConsentScope, Intervention, Session, SessionContext, SpeechMetricSnapshot, StressSignal, TranscriptSegment, VitalSample } from '../contracts/domain.js';
+import { interventionSchema, sessionContextSchema, sessionSchema, transcriptSegmentSchema, vitalSampleSchema } from '../contracts/domain.js';
+import type { InterventionActionResponse } from '../contracts/interventions.js';
 import type { EventAcknowledgement, PulseEvent } from '../contracts/events.js';
 import { pulseEventSchema } from '../contracts/events.js';
 import type { SessionSearchInput, SessionSearchResponse } from '../contracts/session-search.js';
@@ -16,6 +17,15 @@ import { deriveSpeechMetrics } from './speech-metrics.js';
 
 interface JsonRow { json: string }
 interface SearchRow { session_json: string; transcript_excerpt: string; rank: number }
+interface InterventionRow extends JsonRow { command_id: string; idempotency_key: string; expires_at: string | null; dispatched_at: string | null; pattern: string | null }
+
+export interface PendingIntervention {
+  intervention: Intervention;
+  commandId: string;
+  expiresAt: string | null;
+  dispatchedAt: string | null;
+  pattern: 'single' | 'double' | 'breathing' | null;
+}
 
 export class EventStore {
   private readonly database: Database.Database;
@@ -71,6 +81,15 @@ export class EventStore {
           ON CONFLICT(grant_id) DO UPDATE SET revoked_at = excluded.revoked_at, json = excluded.json
         `).run(event.payload.grantId, event.sessionId, event.payload.scope, event.payload.grantedAt,
           event.payload.revokedAt, JSON.stringify(event.payload));
+        if (event.payload.revokedAt !== null && event.payload.scope === 'act:audio') {
+          this.cancelPendingInterventions(event.sessionId, 'whisper_coach', event.payload.revokedAt);
+        }
+        if (event.payload.revokedAt !== null && event.payload.scope === 'act:haptic') {
+          this.cancelPendingInterventions(event.sessionId, 'haptic_nudge', event.payload.revokedAt);
+        }
+      }
+      if (event.type === 'playback_completed' || event.type === 'haptic_completed') {
+        this.completeCommand(event.payload.commandId, event.payload.result, event.timestamp, event.eventId);
       }
     })();
 
@@ -125,6 +144,114 @@ export class EventStore {
       const grant = JSON.parse(json) as ConsentGrant;
       return new Date(grant.grantedAt) <= at && (grant.revokedAt === null || new Date(grant.revokedAt) > at);
     });
+  }
+
+  createIntervention(input: {
+    sessionId: string;
+    type: 'haptic_nudge' | 'whisper_coach';
+    idempotencyKey: string;
+    requestingAgentId: string;
+    triggerEvidenceIds: string[];
+    generatedMessage: string | null;
+    pattern?: 'single' | 'double' | 'breathing';
+    expiresAt?: string;
+  }): InterventionActionResponse {
+    const existing = this.getInterventionByKey(input.sessionId, input.type, input.idempotencyKey);
+    if (existing) return { intervention: existing.intervention, commandId: existing.commandId, duplicate: true };
+
+    const requestedAt = new Date().toISOString();
+    const intervention: Intervention = interventionSchema.parse({
+      interventionId: crypto.randomUUID(),
+      sessionId: input.sessionId,
+      type: input.type,
+      triggerEvidenceIds: input.triggerEvidenceIds,
+      requestingAgentId: input.requestingAgentId,
+      generatedMessage: input.generatedMessage,
+      requestedAt,
+      queuedAt: input.type === 'whisper_coach' ? requestedAt : null,
+      playedAt: null,
+      dismissedAt: null,
+      deliveryResult: 'pending'
+    });
+    const commandId = crypto.randomUUID();
+    this.database.prepare(`
+      INSERT INTO interventions
+        (intervention_id, session_id, type, idempotency_key, command_id, expires_at, dispatched_at, pattern, json)
+      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
+    `).run(intervention.interventionId, input.sessionId, input.type, input.idempotencyKey, commandId,
+      input.expiresAt ?? null, input.pattern ?? null, JSON.stringify(intervention));
+    return { intervention, commandId, duplicate: false };
+  }
+
+  getPendingInterventions(type?: 'haptic_nudge' | 'whisper_coach'): readonly PendingIntervention[] {
+    const rows = this.database.prepare(`
+      SELECT json, command_id, idempotency_key, expires_at, dispatched_at, pattern
+      FROM interventions
+      WHERE json_extract(json, '$.deliveryResult') = 'pending'
+        ${type ? 'AND type = ?' : ''}
+      ORDER BY rowid
+    `).all(...(type ? [type] : [])) as InterventionRow[];
+    return rows.map((row) => this.pendingFromRow(row));
+  }
+
+  getInterventionByCommand(commandId: string): PendingIntervention | undefined {
+    const row = this.database.prepare(`
+      SELECT json, command_id, idempotency_key, expires_at, dispatched_at, pattern
+      FROM interventions WHERE command_id = ?
+    `).get(commandId) as InterventionRow | undefined;
+    return row ? this.pendingFromRow(row) : undefined;
+  }
+
+  getConversationSilenceMs(sessionId: string, nowEpochMs = Date.now()): number {
+    const session = this.getSession(sessionId);
+    if (!session?.startedAt) return 0;
+    const latestEndMs = this.getTranscriptSegments(sessionId)
+      .filter(({ speaker }) => speaker !== 'agent')
+      .reduce((latest, segment) => Math.max(latest, segment.endMs), 0);
+    const elapsedMs = Math.max(0, nowEpochMs - Date.parse(session.startedAt));
+    return Math.max(0, elapsedMs - latestEndMs);
+  }
+
+  markInterventionDispatched(commandId: string, at = new Date().toISOString()): void {
+    this.database.prepare('UPDATE interventions SET dispatched_at = ? WHERE command_id = ? AND dispatched_at IS NULL')
+      .run(at, commandId);
+  }
+
+  completeCommand(commandId: string, result: 'played' | 'delivered' | 'cancelled' | 'failed', at: string, eventId?: string): Intervention | undefined {
+    const row = this.database.prepare(`
+      SELECT json, command_id, idempotency_key, expires_at, dispatched_at, pattern
+      FROM interventions WHERE command_id = ?
+    `).get(commandId) as InterventionRow | undefined;
+    if (!row) return undefined;
+    const current = interventionSchema.parse(JSON.parse(row.json));
+    if (current.deliveryResult !== 'pending') return current;
+    const delivered = result === 'played' || result === 'delivered';
+    const updated = interventionSchema.parse({
+      ...current,
+      playedAt: delivered ? at : null,
+      dismissedAt: result === 'cancelled' ? at : null,
+      deliveryResult: delivered ? 'delivered' : result
+    });
+    this.database.prepare('UPDATE interventions SET json = ? WHERE command_id = ?').run(JSON.stringify(updated), commandId);
+    if (delivered && current.type === 'whisper_coach' && current.generatedMessage && eventId) {
+      this.storeAgentTranscript(updated, current.generatedMessage, at, eventId);
+    }
+    return updated;
+  }
+
+  expireIntervention(commandId: string, at = new Date().toISOString()): Intervention | undefined {
+    const row = this.database.prepare('SELECT json FROM interventions WHERE command_id = ?').get(commandId) as JsonRow | undefined;
+    if (!row) return undefined;
+    const current = interventionSchema.parse(JSON.parse(row.json));
+    if (current.deliveryResult !== 'pending') return current;
+    const updated = interventionSchema.parse({ ...current, dismissedAt: at, deliveryResult: 'expired' });
+    this.database.prepare('UPDATE interventions SET json = ? WHERE command_id = ?').run(JSON.stringify(updated), commandId);
+    return updated;
+  }
+
+  getInterventions(sessionId: string): readonly Intervention[] {
+    return (this.database.prepare('SELECT json FROM interventions WHERE session_id = ? ORDER BY rowid').all(sessionId) as JsonRow[])
+      .map(({ json }) => interventionSchema.parse(JSON.parse(json)));
   }
 
   getTranscriptSegments(sessionId: string): readonly TranscriptSegment[] {
@@ -361,6 +488,19 @@ export class EventStore {
         revoked_at TEXT,
         json TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS interventions (
+        intervention_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        command_id TEXT NOT NULL UNIQUE,
+        expires_at TEXT,
+        dispatched_at TEXT,
+        pattern TEXT,
+        json TEXT NOT NULL,
+        UNIQUE(session_id, type, idempotency_key)
+      );
+      CREATE INDEX IF NOT EXISTS interventions_session_idx ON interventions(session_id, type);
       INSERT INTO transcript_search (session_id, segment_id, text)
       SELECT session_id, segment_id, json_extract(json, '$.text') FROM transcript_segments
       WHERE segment_id NOT IN (SELECT segment_id FROM transcript_search);
@@ -393,6 +533,61 @@ export class EventStore {
       receivedAt: new Date().toISOString(),
       error: null
     };
+  }
+
+  private getInterventionByKey(sessionId: string, type: Intervention['type'], idempotencyKey: string): PendingIntervention | undefined {
+    const row = this.database.prepare(`
+      SELECT json, command_id, idempotency_key, expires_at, dispatched_at, pattern
+      FROM interventions WHERE session_id = ? AND type = ? AND idempotency_key = ?
+    `).get(sessionId, type, idempotencyKey) as InterventionRow | undefined;
+    return row ? this.pendingFromRow(row) : undefined;
+  }
+
+  private pendingFromRow(row: InterventionRow): PendingIntervention {
+    const pattern = row.pattern;
+    if (pattern !== null && pattern !== 'single' && pattern !== 'double' && pattern !== 'breathing') {
+      throw new Error(`Unknown stored haptic pattern: ${pattern}`);
+    }
+    return {
+      intervention: interventionSchema.parse(JSON.parse(row.json)),
+      commandId: row.command_id,
+      expiresAt: row.expires_at,
+      dispatchedAt: row.dispatched_at,
+      pattern
+    };
+  }
+
+  private cancelPendingInterventions(sessionId: string, type: 'haptic_nudge' | 'whisper_coach', at: string): void {
+    const rows = this.database.prepare(`
+      SELECT command_id FROM interventions
+      WHERE session_id = ? AND type = ? AND json_extract(json, '$.deliveryResult') = 'pending'
+    `).all(sessionId, type) as Array<{ command_id: string }>;
+    for (const row of rows) this.completeCommand(row.command_id, 'cancelled', at);
+  }
+
+  private storeAgentTranscript(intervention: Intervention, text: string, at: string, eventId: string): void {
+    const session = this.getSession(intervention.sessionId);
+    if (!session?.startedAt) return;
+    const startMs = Math.max(0, Date.parse(at) - Date.parse(session.startedAt));
+    const segment = transcriptSegmentSchema.parse({
+      sessionId: intervention.sessionId,
+      segmentId: `agent-${intervention.interventionId}`,
+      speaker: 'agent',
+      text,
+      startMs,
+      endMs: startMs,
+      providerTimestamp: at,
+      confidence: 1,
+      isFinal: true
+    });
+    this.database.prepare(`
+      INSERT OR IGNORE INTO transcript_segments (event_id, segment_id, session_id, start_ms, end_ms, json)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(eventId, segment.segmentId, segment.sessionId, segment.startMs, segment.endMs, JSON.stringify(segment));
+    this.database.prepare(`
+      INSERT INTO transcript_search (session_id, segment_id, text)
+      SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM transcript_search WHERE segment_id = ?)
+    `).run(segment.sessionId, segment.segmentId, segment.text, segment.segmentId);
   }
 
   private logContext(event: PulseEvent) {

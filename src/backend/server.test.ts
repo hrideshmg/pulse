@@ -321,6 +321,156 @@ describe('Phase 2 backend', () => {
     assert.equal(latest.session.sessionId, sessionId);
     assert.equal(latest.segment.segmentId, 'segment-transcript-search');
   });
+
+  it('consent-gates and deduplicates simulated haptic interventions', async () => {
+    const sessionId = 'session-phase-six-haptic';
+    const startedAt = new Date().toISOString();
+    const start = {
+      ...mockEventSequence[0],
+      sessionId,
+      eventId: 'event-phase-six-haptic-session',
+      timestamp: startedAt,
+      payload: { session: { ...mockEventSequence[0].payload.session, sessionId, status: 'active', startedAt } }
+    };
+    assert.equal((await fetch(`${baseUrl}/v1/events`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(start)
+    })).status, 202);
+
+    const denied = await fetch(`${baseUrl}/v1/sessions/current/interventions/haptic`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        idempotencyKey: 'haptic-retry', pattern: 'breathing', triggerEvidenceIds: [], requestingAgentId: 'test-agent'
+      })
+    });
+    assert.equal(denied.status, 409);
+    assert.match((await denied.json() as { error: string }).error, /Consent scope act:haptic is not granted/);
+
+    const grant = {
+      version: '1.0', type: 'consent_updated', sessionId, eventId: 'event-phase-six-haptic-consent',
+      timestamp: startedAt, correlationId: 'correlation-phase-six-haptic',
+      payload: { grantId: 'grant-phase-six-haptic', sessionId, scope: 'act:haptic', grantedAt: startedAt, revokedAt: null }
+    };
+    assert.equal((await fetch(`${baseUrl}/v1/events`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(grant)
+    })).status, 202);
+
+    const call = () => fetch(`${baseUrl}/v1/sessions/current/interventions/haptic`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        idempotencyKey: 'haptic-retry', pattern: 'breathing', triggerEvidenceIds: ['stress-1'], requestingAgentId: 'test-agent'
+      })
+    });
+    const first = await (await call()).json() as { intervention: { interventionId: string; deliveryResult: string }; duplicate: boolean };
+    const retry = await (await call()).json() as { intervention: { interventionId: string }; duplicate: boolean };
+    assert.equal(first.intervention.deliveryResult, 'delivered');
+    assert.equal(first.duplicate, false);
+    assert.equal(retry.duplicate, true);
+    assert.equal(retry.intervention.interventionId, first.intervention.interventionId);
+
+    const history = await (await fetch(`${baseUrl}/v1/sessions/${sessionId}/interventions`)).json() as { interventions: unknown[] };
+    assert.equal(history.interventions.length, 1);
+  });
+
+  it('queues unlimited whisper text until silence and stores it only as agent speech', async () => {
+    const sessionId = 'session-phase-six-whisper';
+    const startedAt = new Date().toISOString();
+    const text = Array.from({ length: 600 }, (_, index) => `coach${index}`).join(' ');
+    const events = [
+      {
+        ...mockEventSequence[0], sessionId, eventId: 'event-phase-six-whisper-session', timestamp: startedAt,
+        payload: { session: { ...mockEventSequence[0].payload.session, sessionId, status: 'active', startedAt } }
+      },
+      {
+        version: '1.0', type: 'consent_updated', sessionId, eventId: 'event-phase-six-whisper-consent',
+        timestamp: startedAt, correlationId: 'correlation-phase-six-whisper',
+        payload: { grantId: 'grant-phase-six-whisper', sessionId, scope: 'act:audio', grantedAt: startedAt, revokedAt: null }
+      },
+      {
+        ...mockEventSequence[2], sessionId, eventId: 'event-phase-six-recent-speech', timestamp: startedAt,
+        payload: {
+          ...mockEventSequence[2].payload, sessionId, segmentId: 'segment-phase-six-recent',
+          speaker: 'participant', text: 'I am still talking.', startMs: 0, endMs: 100, providerTimestamp: startedAt
+        }
+      }
+    ];
+    for (const event of events) {
+      assert.equal((await fetch(`${baseUrl}/v1/events`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event)
+      })).status, 202);
+    }
+
+    const response = await fetch(`${baseUrl}/v1/sessions/current/interventions/whisper`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        idempotencyKey: 'long-whisper', text, triggerEvidenceIds: ['segment-phase-six-recent'],
+        expiresInMs: 5_000, requestingAgentId: 'test-agent'
+      })
+    });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json() as { intervention: { deliveryResult: string } }).intervention.deliveryResult, 'pending');
+
+    await new Promise((resolve) => setTimeout(resolve, 1_800));
+    const history = await (await fetch(`${baseUrl}/v1/sessions/${sessionId}/interventions`)).json() as {
+      interventions: Array<{ deliveryResult: string; generatedMessage: string }>;
+    };
+    assert.equal(history.interventions[0].deliveryResult, 'delivered');
+    assert.equal(history.interventions[0].generatedMessage, text);
+
+    const transcript = await (await fetch(`${baseUrl}/v1/sessions/${sessionId}/transcript`)).json() as {
+      segments: Array<{ speaker: string; text: string }>;
+    };
+    assert.deepEqual(transcript.segments.map(({ speaker }) => speaker), ['participant', 'agent']);
+    assert.equal(transcript.segments[1].text, text);
+
+    const now = new Date().toISOString();
+    const elapsedMs = Date.parse(now) - Date.parse(startedAt);
+    const recentSpeech = {
+      ...mockEventSequence[2], sessionId, eventId: 'event-phase-six-before-revocation', timestamp: now,
+      payload: {
+        ...mockEventSequence[2].payload, sessionId, segmentId: 'segment-phase-six-before-revocation',
+        speaker: 'wearer', text: 'Do not play over this.', startMs: elapsedMs, endMs: elapsedMs, providerTimestamp: now
+      }
+    };
+    await fetch(`${baseUrl}/v1/events`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(recentSpeech)
+    });
+    await fetch(`${baseUrl}/v1/sessions/current/interventions/whisper`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        idempotencyKey: 'expired-whisper', text: 'This becomes stale.', triggerEvidenceIds: [],
+        expiresInMs: 1_000, requestingAgentId: 'test-agent'
+      })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    await fetch(`${baseUrl}/v1/sessions/current/interventions/whisper`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        idempotencyKey: 'revoked-whisper', text: 'This must never play.', triggerEvidenceIds: [],
+        expiresInMs: 5_000, requestingAgentId: 'test-agent'
+      })
+    });
+    const revokedAt = new Date().toISOString();
+    const revocation = {
+      version: '1.0', type: 'consent_updated', sessionId, eventId: 'event-phase-six-whisper-revoked',
+      timestamp: revokedAt, correlationId: 'correlation-phase-six-revoked',
+      payload: { grantId: 'grant-phase-six-whisper', sessionId, scope: 'act:audio', grantedAt: startedAt, revokedAt }
+    };
+    await fetch(`${baseUrl}/v1/events`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(revocation)
+    });
+    const revokedHistory = await (await fetch(`${baseUrl}/v1/sessions/${sessionId}/interventions`)).json() as {
+      interventions: Array<{ deliveryResult: string }>;
+    };
+    assert.deepEqual(
+      revokedHistory.interventions.map(({ deliveryResult }) => deliveryResult),
+      ['delivered', 'expired', 'cancelled']
+    );
+  });
 });
 
 describe('SQLite persistence', () => {

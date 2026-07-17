@@ -5,6 +5,7 @@ import { SessionTools } from './session.tools.js';
 import { VitalsResources } from './vitals.resources.js';
 import { VitalsResourceNotifier } from './vitals-resource-notifier.js';
 import { SpeechMetricsResources } from './speech-metrics.resources.js';
+import { InterventionTools } from './intervention.tools.js';
 
 @McpApp({
   module: AppModule,
@@ -13,7 +14,7 @@ import { SpeechMetricsResources } from './speech-metrics.resources.js';
 })
 @Module({
   name: 'pulse-foundation',
-  controllers: [VitalsResources, TranscriptResources, SpeechMetricsResources, SessionTools, PhaseZeroTools],
+  controllers: [VitalsResources, TranscriptResources, SpeechMetricsResources, SessionTools, InterventionTools, PhaseZeroTools],
   providers: [VitalsResourceNotifier]
 })
 export class AppModule {}
