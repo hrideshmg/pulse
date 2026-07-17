@@ -1,0 +1,164 @@
+{
+  "version": "1.0.0",
+  "widgets": [
+    {
+      "uri": "/intervention-delivery-receipt",
+      "name": "Intervention Delivery Receipt",
+      "description": "Shows the exact MCP-traceable delivery result for a haptic nudge or whispered coaching line.",
+      "examples": [
+        {
+          "name": "Delivered Haptic",
+          "description": "Successful calming watch buzz with consent granted.",
+          "data": {
+            "sessionId": "session-demo-001",
+            "interventionId": "int-haptic-demo-001",
+            "toolName": "haptic_nudge",
+            "correlationId": "corr-haptic-demo-001",
+            "requestedAt": "2026-07-17T10:14:03.000Z",
+            "commandStatus": "delivered",
+            "deliveryResult": "delivered",
+            "simulated": false,
+            "consentCheck": {
+              "scope": "act:haptic",
+              "allowed": true,
+              "checkedAt": "2026-07-17T10:14:03.000Z",
+              "reason": null
+            },
+            "target": {
+              "channel": "watch_haptics",
+              "pattern": "steady_pulse",
+              "message": null
+            },
+            "deliveryAcknowledgement": {
+              "status": "acknowledged",
+              "acknowledgedAt": "2026-07-17T10:14:04.000Z",
+              "detail": "Watch bridge confirmed one steady calming pulse on the paired Pixel Watch."
+            }
+          }
+        },
+        {
+          "name": "Simulated Whisper",
+          "description": "Successful whispered line on the demo simulator path.",
+          "data": {
+            "sessionId": "session-demo-002",
+            "interventionId": "int-whisper-demo-002",
+            "toolName": "whisper_coach",
+            "correlationId": "corr-whisper-demo-002",
+            "requestedAt": "2026-07-17T10:15:12.000Z",
+            "commandStatus": "delivered",
+            "deliveryResult": "delivered",
+            "simulated": true,
+            "consentCheck": {
+              "scope": "act:audio",
+              "allowed": true,
+              "checkedAt": "2026-07-17T10:15:12.000Z",
+              "reason": null
+            },
+            "target": {
+              "channel": "earbud_tts",
+              "pattern": null,
+              "message": "Ease your pace. Let the silence buy you a beat."
+            },
+            "deliveryAcknowledgement": {
+              "status": "acknowledged",
+              "acknowledgedAt": "2026-07-17T10:15:14.000Z",
+              "detail": "Simulated earbud playback completed and capture resumed cleanly."
+            }
+          }
+        },
+        {
+          "name": "Consent Revoked",
+          "description": "Action blocked because the wearer revoked audio consent mid-session.",
+          "data": {
+            "sessionId": "session-demo-003",
+            "interventionId": "int-whisper-demo-003",
+            "toolName": "whisper_coach",
+            "correlationId": "corr-whisper-demo-003",
+            "requestedAt": "2026-07-17T10:16:21.000Z",
+            "commandStatus": "denied",
+            "deliveryResult": "denied",
+            "simulated": false,
+            "consentCheck": {
+              "scope": "act:audio",
+              "allowed": false,
+              "checkedAt": "2026-07-17T10:16:21.000Z",
+              "reason": "Wearer revoked act:audio at 00:16 before playback began."
+            },
+            "target": {
+              "channel": "earbud_tts",
+              "pattern": null,
+              "message": "Breathe low and slow."
+            },
+            "deliveryAcknowledgement": {
+              "status": "unavailable",
+              "acknowledgedAt": null,
+              "detail": "No device command was dispatched after the consent check failed."
+            }
+          }
+        },
+        {
+          "name": "Expired Before Quiet Window",
+          "description": "Queued whisper aged out before a safe playback gap appeared.",
+          "data": {
+            "sessionId": "session-demo-004",
+            "interventionId": "int-whisper-demo-004",
+            "toolName": "whisper_coach",
+            "correlationId": "corr-whisper-demo-004",
+            "requestedAt": "2026-07-17T10:17:44.000Z",
+            "commandStatus": "expired",
+            "deliveryResult": "expired",
+            "simulated": false,
+            "consentCheck": {
+              "scope": "act:audio",
+              "allowed": true,
+              "checkedAt": "2026-07-17T10:17:44.000Z",
+              "reason": null
+            },
+            "target": {
+              "channel": "earbud_tts",
+              "pattern": null,
+              "message": "Pause before you answer."
+            },
+            "deliveryAcknowledgement": {
+              "status": "unavailable",
+              "acknowledgedAt": null,
+              "detail": "Playback never started because no safe silence window appeared before expiry."
+            }
+          }
+        },
+        {
+          "name": "Dispatch Failure",
+          "description": "Backend accepted the request but the device bridge failed the command.",
+          "data": {
+            "sessionId": "session-demo-005",
+            "interventionId": "int-haptic-demo-005",
+            "toolName": "haptic_nudge",
+            "correlationId": "corr-haptic-demo-005",
+            "requestedAt": "2026-07-17T10:18:30.000Z",
+            "commandStatus": "failed",
+            "deliveryResult": "failed",
+            "simulated": false,
+            "consentCheck": {
+              "scope": "act:haptic",
+              "allowed": true,
+              "checkedAt": "2026-07-17T10:18:30.000Z",
+              "reason": null
+            },
+            "target": {
+              "channel": "watch_haptics",
+              "pattern": "grounding_ramp",
+              "message": null
+            },
+            "deliveryAcknowledgement": {
+              "status": "failed",
+              "acknowledgedAt": "2026-07-17T10:18:31.000Z",
+              "detail": "Phone-to-watch command channel returned a delivery failure and suppressed retry."
+            }
+          }
+        }
+      ],
+      "tags": ["pulse", "intervention", "receipt", "audit"]
+    }
+  ],
+  "generatedAt": "2026-07-17T00:00:00.000Z"
+}
