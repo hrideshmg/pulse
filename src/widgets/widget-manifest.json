@@ -1,0 +1,12 @@
+{
+  "version": "1.0.0",
+  "widgets": [
+    {
+      "uri": "/session-report",
+      "name": "Session timeline",
+      "description": "Scrub heart rate and transcript evidence on one synchronized timeline.",
+      "examples": [],
+      "tags": ["session", "vitals", "transcript"]
+    }
+  ]
+}

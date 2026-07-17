@@ -2,6 +2,8 @@
 node_modules/
 bun.lock
 dist/
+**/.next/
+src/widgets/out/
 data/
 .env
 local.properties

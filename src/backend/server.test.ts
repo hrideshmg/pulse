@@ -63,6 +63,12 @@ describe('Phase 2 backend', () => {
     const response = await fetch(`${baseUrl}/v1/sessions/${mockEventSequence[0].sessionId}/events`);
     const body = await response.json() as { events: unknown[] };
     assert.equal(body.events.length, mockEventSequence.length);
+
+    const reportResponse = await fetch(`${baseUrl}/v1/sessions/${mockEventSequence[0].sessionId}/report`);
+    assert.equal(reportResponse.status, 200);
+    const report = await reportResponse.json() as { session: { sessionId: string }; timeline: unknown[] };
+    assert.equal(report.session.sessionId, mockEventSequence[0].sessionId);
+    assert.equal(report.timeline.length, 3);
   });
 
   it('suppresses duplicate event IDs', async () => {
@@ -331,6 +337,7 @@ describe('SQLite persistence', () => {
     try {
       const firstStore = new EventStore(logger, databasePath);
       for (const event of mockEventSequence) firstStore.ingest(event);
+      const firstReport = firstStore.getSessionReport(mockEventSequence[0].sessionId);
       firstStore.close();
 
       const reopenedStore = new EventStore(logger, databasePath);
@@ -340,6 +347,8 @@ describe('SQLite persistence', () => {
         ['segment-fixture-001']
       );
       assert.equal(reopenedStore.ingest(mockEventSequence[2]).duplicate, true);
+      assert.deepEqual(reopenedStore.getSessionReport(mockEventSequence[0].sessionId), firstReport);
+      assert.equal((reopenedStore.getPersistedSpeechMetrics(mockEventSequence[0].sessionId)?.wordsPerMinute ?? 0) > 0, true);
       reopenedStore.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
