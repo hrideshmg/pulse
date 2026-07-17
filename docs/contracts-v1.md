@@ -10,6 +10,14 @@ The canonical TypeScript schemas are in `src/contracts`. Android consumes the ma
 
 Timeline payloads additionally carry session-relative monotonic milliseconds. Consumers must acknowledge and ignore an already-seen `eventId`; they must never repeat a command because of a retry.
 
+## Phase 2 delivery
+
+Watch vital events use one urgent DataItem per event at `/pulse/vitals/{eventId}`. The phone writes `/pulse/vital-acks/{eventId}` only after the event is committed to its local replay queue. The watch retains unacknowledged DataItems across a disconnect and removes them after acknowledgement. Both devices retain recently processed event IDs so a reconnect cannot duplicate a sample.
+
+The phone owns the session clock. A `session_state` DataItem at `/pulse/session-state` includes the current session-relative elapsed time as transport metadata; the watch maps that value onto its own monotonic clock. Contract payloads remain strict and unchanged.
+
+Phone-to-backend delivery uses `/v1/session-stream`, a persistent WebSocket carrying one canonical event JSON object per message. The backend responds with `eventAcknowledgementSchema` JSON for every message. The phone sends one event at a time, persists unacknowledged events, reconnects with bounded exponential backoff, and replays after a missing acknowledgement. Backend event-ID suppression makes replay idempotent.
+
 ## Boundaries
 
 | Boundary | Messages |
@@ -44,11 +52,13 @@ Canonical JSON fixtures live in `fixtures/events`. Validate TypeScript consumers
 android\gradlew.bat :contracts:testDebugUnitTest
 ```
 
-## HTTP Foundation
+## Backend endpoints
 
 - `GET /health`: backend, transcription-provider, command-channel, and runtime-mode health
 - `POST /v1/events`: strict v1 event ingestion and duplicate acknowledgement
+- `WS /v1/session-stream`: persistent event ingestion and per-event acknowledgement
 - `GET /v1/sessions/{sessionId}/events`: current in-memory mock timeline
+- `GET /v1/sessions/{sessionId}/vitals`: ordered vital samples and latest sample
 - `PATCH /v1/sessions/{sessionId}/status`: lifecycle transition validation
 
-Storage is intentionally in memory in Phase 1. Restarting the backend clears sessions and duplicate IDs.
+Backend storage remains in memory. Restarting it clears sessions and duplicate IDs; backend process restart recovery is deferred to hardening. Phase 2 replay covers transport disconnects while the backend process and session store remain alive.

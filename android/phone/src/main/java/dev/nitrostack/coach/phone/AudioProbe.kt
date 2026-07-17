@@ -25,8 +25,6 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import org.json.JSONObject
-import java.io.File
-import java.io.FileOutputStream
 import java.util.Locale
 
 data class AudioProbeState(
@@ -36,7 +34,18 @@ data class AudioProbeState(
     val transcript: String = ""
 )
 
-class AudioProbe(private val context: Context, private val scope: CoroutineScope) : TextToSpeech.OnInitListener {
+data class FinalTranscriptSegment(
+    val text: String,
+    val startMs: Long,
+    val endMs: Long,
+    val confidence: Double?
+)
+
+class AudioProbe(
+    private val context: Context,
+    private val scope: CoroutineScope,
+    private val onFinalTranscript: (FinalTranscriptSegment) -> Unit = {}
+) : TextToSpeech.OnInitListener {
     val state = MutableStateFlow(AudioProbeState())
     private val audioManager = context.getSystemService(AudioManager::class.java)
     private val tts = TextToSpeech(context, this)
@@ -44,6 +53,7 @@ class AudioProbe(private val context: Context, private val scope: CoroutineScope
     private var captureJob: Job? = null
     private var recorder: AudioRecord? = null
     private var socket: WebSocket? = null
+    private var captureTimelineOffsetMs = 0L
 
     override fun onInit(result: Int) {
         if (result == TextToSpeech.SUCCESS) tts.language = Locale.US
@@ -65,8 +75,9 @@ class AudioProbe(private val context: Context, private val scope: CoroutineScope
     }
 
     @SuppressLint("MissingPermission")
-    fun startCapture() {
+    fun startCapture(timelineOffsetMs: Long = 0) {
         if (captureJob != null) return
+        captureTimelineOffsetMs = timelineOffsetMs
         val sampleRate = 16_000
         val minimum = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val format = AudioFormat.Builder()
@@ -82,18 +93,14 @@ class AudioProbe(private val context: Context, private val scope: CoroutineScope
         selectedDevice?.let(newRecorder::setPreferredDevice)
         recorder = newRecorder
         socket = openTranscriptionSocket()
-        val output = File(context.cacheDir, "phase-zero-${System.currentTimeMillis()}.pcm")
         newRecorder.startRecording()
-        state.value = state.value.copy(capturing = true, status = "Capturing to ${output.name}")
+        state.value = state.value.copy(capturing = true, status = "Streaming transcription")
         captureJob = scope.launch(Dispatchers.IO) {
-            FileOutputStream(output).use { file ->
-                val buffer = ByteArray(minimum)
-                while (currentCoroutineContext().isActive) {
-                    val read = newRecorder.read(buffer, 0, buffer.size)
-                    if (read > 0) {
-                        file.write(buffer, 0, read)
-                        socket?.send(ByteString.of(*buffer.copyOf(read)))
-                    }
+            val buffer = ByteArray(minimum)
+            while (currentCoroutineContext().isActive) {
+                val read = newRecorder.read(buffer, 0, buffer.size)
+                if (read > 0) {
+                    socket?.send(ByteString.of(*buffer.copyOf(read)))
                 }
             }
         }
@@ -156,7 +163,14 @@ class AudioProbe(private val context: Context, private val scope: CoroutineScope
                 if (!json.optBoolean("is_final")) return
                 val transcript = json.optJSONObject("channel")
                     ?.optJSONArray("alternatives")?.optJSONObject(0)?.optString("transcript").orEmpty()
-                if (transcript.isNotBlank()) state.value = state.value.copy(transcript = transcript, status = "Final transcript received")
+                if (transcript.isNotBlank()) {
+                    val alternative = json.optJSONObject("channel")?.optJSONArray("alternatives")?.optJSONObject(0)
+                    val startMs = captureTimelineOffsetMs + (json.optDouble("start", 0.0) * 1_000).toLong()
+                    val endMs = startMs + (json.optDouble("duration", 0.0) * 1_000).toLong()
+                    val confidence = alternative?.optDouble("confidence")?.takeUnless { it.isNaN() }
+                    state.value = state.value.copy(transcript = transcript, status = "Final transcript uploaded")
+                    onFinalTranscript(FinalTranscriptSegment(transcript, startMs, endMs, confidence))
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, error: Throwable, response: Response?) {

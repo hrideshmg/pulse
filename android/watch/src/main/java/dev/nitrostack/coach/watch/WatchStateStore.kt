@@ -1,0 +1,79 @@
+package dev.nitrostack.coach.watch
+
+import android.content.Context
+import android.os.SystemClock
+import kotlin.math.abs
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+data class WatchState(
+    val sessionId: String? = null,
+    val sessionStatus: String = "created",
+    val sessionStartElapsedRealtimeMs: Long = 0,
+    val sessionClockSynchronized: Boolean = false,
+    val phoneConnected: Boolean = false,
+    val backendConnected: Boolean = false,
+    val pendingEvents: Int = 0
+)
+
+object WatchStateStore {
+    private const val PREFS = "pulse_watch_bridge"
+    private const val PENDING = "pending_event_ids"
+    private val mutableState = MutableStateFlow(WatchState())
+    val state = mutableState.asStateFlow()
+
+    fun restore(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val currentBootEpochMs = System.currentTimeMillis() - SystemClock.elapsedRealtime()
+        val savedBootEpochMs = prefs.getLong("boot_epoch", 0)
+        val validMonotonicAnchor = savedBootEpochMs > 0 && abs(currentBootEpochMs - savedBootEpochMs) < 5_000
+        mutableState.value = mutableState.value.copy(
+            sessionId = prefs.getString("session_id", null),
+            sessionStatus = prefs.getString("session_status", "created") ?: "created",
+            sessionStartElapsedRealtimeMs = if (validMonotonicAnchor) prefs.getLong("session_start_elapsed", 0) else 0,
+            sessionClockSynchronized = validMonotonicAnchor && prefs.getBoolean("session_clock_synchronized", false),
+            pendingEvents = prefs.getStringSet(PENDING, emptySet()).orEmpty().size
+        )
+    }
+
+    fun updateSession(context: Context, sessionId: String, status: String, sessionElapsedAtSyncMs: Long) {
+        val current = mutableState.value
+        val alreadySynchronized = current.sessionId == sessionId && current.sessionClockSynchronized
+        val startElapsed = if (alreadySynchronized) {
+            current.sessionStartElapsedRealtimeMs
+        } else {
+            SystemClock.elapsedRealtime() - sessionElapsedAtSyncMs
+        }
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString("session_id", sessionId)
+            .putString("session_status", status)
+            .putLong("session_start_elapsed", startElapsed)
+            .putLong("boot_epoch", System.currentTimeMillis() - SystemClock.elapsedRealtime())
+            .putBoolean("session_clock_synchronized", true)
+            .apply()
+        mutableState.value = mutableState.value.copy(
+            sessionId = sessionId,
+            sessionStatus = status,
+            sessionStartElapsedRealtimeMs = startElapsed,
+            sessionClockSynchronized = true
+        )
+    }
+
+    fun updateConnection(phoneConnected: Boolean? = null, backendConnected: Boolean? = null) {
+        mutableState.value = mutableState.value.copy(
+            phoneConnected = phoneConnected ?: mutableState.value.phoneConnected,
+            backendConnected = backendConnected ?: mutableState.value.backendConnected
+        )
+    }
+
+    fun addPending(context: Context, eventId: String) = updatePending(context) { it + eventId }
+
+    fun acknowledge(context: Context, eventId: String) = updatePending(context) { it - eventId }
+
+    private fun updatePending(context: Context, update: (Set<String>) -> Set<String>) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val pending = update(prefs.getStringSet(PENDING, emptySet()).orEmpty().toSet())
+        prefs.edit().putStringSet(PENDING, pending).apply()
+        mutableState.value = mutableState.value.copy(pendingEvents = pending.size)
+    }
+}

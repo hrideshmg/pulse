@@ -26,7 +26,7 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         buildConfigField("String", "DEEPGRAM_API_KEY", "\"$deepgramKey\"")
-        buildConfigField("String", "BACKEND_URL", "\"${runtimeSetting("BACKEND_URL", "http://10.33.49.28:8787")}\"")
+        buildConfigField("String", "BACKEND_URL", "\"${runtimeSetting("BACKEND_URL", "http://10.0.2.2:8787")}\"")
         buildConfigField("String", "VITALS_SOURCE", "\"${runtimeSetting("VITALS_SOURCE", "simulated")}\"")
         buildConfigField("String", "AUDIO_INPUT", "\"${runtimeSetting("AUDIO_INPUT", "phone")}\"")
         buildConfigField("String", "TRANSCRIPTION_MODE", "\"${runtimeSetting("TRANSCRIPTION_MODE", "fixture")}\"")
@@ -53,4 +53,5 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
+    testImplementation("junit:junit:4.13.2")
 }

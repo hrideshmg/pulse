@@ -1,15 +1,15 @@
 # Pulse
 
-Pulse is a NitroStack MCP server plus watch, phone, and backend foundations for exposing consent-scoped physiological and conversational state to agents. Phase 1 establishes versioned contracts, health checks, fallback configuration, structured boundary logs, and a hardware-free mock event path. The Phase 0 hardware probes remain available while device choices are validated.
+Pulse is a NitroStack MCP server plus watch, phone, and backend foundations for exposing consent-scoped physiological and conversational state to agents. Phase 2 adds a reliable heart-rate path from the foreground Wear OS sensor through the phone to ordered backend storage. The Phase 0 audio and haptic probes remain available while device choices are validated.
 
 ## Components
 
 - `src/contracts`: canonical Zod domain records, versioned event envelopes, lifecycle rules, and deterministic fixtures.
-- `src/backend`: dependency-independent HTTP health and event-ingestion shell with duplicate suppression.
-- `src`: NitroStack MCP server exposing `pulse://health` and the retained `phase_zero_probe` tool.
+- `src/backend`: HTTP/WebSocket event ingress with duplicate suppression and ordered per-session vital and transcript storage.
+- `src`: NitroStack MCP server exposing `pulse://health`, `session://current/transcript`, and the retained `phase_zero_probe` tool.
 - `android/contracts`: shared Kotlin envelope validation and structured boundary logging.
-- `android/watch`: runnable Health Services and haptic probe with visible runtime mode.
-- `android/phone`: runnable audio/device probe, backend health, visible fallback modes, and mock event dispatch.
+- `android/watch`: foreground `MeasureClient` capture, capability/permission checks, visible connection state, and acknowledged urgent DataItems.
+- `android/phone`: durable event replay queue, persistent backend stream, scripted simulator, and live transcription.
 
 The phone and watch modules intentionally share `applicationId` `dev.nitrostack.coach`, which lets Android associate them as one wearable application.
 
@@ -23,7 +23,7 @@ The phone and watch modules intentionally share `applicationId` `dev.nitrostack.
 
 Never put the Deepgram key in source control. Copy the safe settings from `.env.example` into your process environment. For Android Studio builds, add local settings to the ignored `android/local.properties`; shell builds may use environment variables. The Phase 0 probe embeds a Deepgram value in a local debug APK only, so never use a production credential there.
 
-## Run Phase 1
+## Run Phase 2
 
 Install and verify the TypeScript components:
 
@@ -40,7 +40,7 @@ npm run dev:backend
 npm run dev
 ```
 
-The backend binds to `0.0.0.0:8787` by default. Check `http://127.0.0.1:8787/health` locally, then exercise the hardware-free event path:
+The backend binds to `0.0.0.0:8787` by default. Check `http://127.0.0.1:8787/health` locally. The phone connects to `WS /v1/session-stream`; the existing fixture path remains available through:
 
 ```text
 npm run mock:events
@@ -63,7 +63,9 @@ Build and validate the shared fixtures from a shell:
 android\gradlew.bat :contracts:testDebugUnitTest :phone:assembleDebug :watch:assembleDebug
 ```
 
-The emulator reaches the local backend through the default `BACKEND_URL=http://10.0.2.2:8787`. A physical phone must set `BACKEND_URL` in `android/local.properties` to a host address it can reach. The phone screen always displays active modes and has a `Send mock events` action.
+The emulator reaches the local backend through the default `BACKEND_URL=http://10.0.2.2:8787`. Debug builds allow the resulting local `ws://` connection. A physical phone must set `BACKEND_URL` in `android/local.properties` to a host address it can reach; production builds must use HTTPS/WSS. The phone screen displays source, latest BPM, freshness, watch/backend connectivity, and upload queue depth.
+
+For real capture set `VITALS_SOURCE=watch`, grant microphone permission in the phone app once, then tap `Start session` on the watch or phone. Keep the watch app visible because `MeasureClient` is deliberately foreground-only. The phone streams final transcript segments through the durable backend queue, and MCP exposes the latest 100 final segments at `session://current/transcript`. For hardware-free validation set `VITALS_SOURCE=simulated`, start a session, and tap `Run simulated sequence`. Simulated sessions do not start watch measurement, every stored sample has `source=simulator`, and both the UI and session record identify the simulation.
 
 Supported settings are:
 
@@ -76,22 +78,22 @@ COPILOT_ENABLED=false
 STORE_RAW_AUDIO=false
 ```
 
-`TRANSCRIPTION_MODE=cloud` without `DEEPGRAM_API_KEY` starts the backend but returns an explicit unavailable health state. `STORE_RAW_AUDIO=true` is rejected in Phase 1. See `docs/contracts-v1.md` for event boundaries and lifecycle rules.
+`TRANSCRIPTION_MODE=cloud` without `DEEPGRAM_API_KEY` starts the backend but returns an explicit unavailable health state. `STORE_RAW_AUDIO=true` is rejected. See `docs/contracts-v1.md` for event boundaries and delivery rules, and `docs/phase-two-validation.md` for acceptance checks.
 
 ## Phase 0 Hardware Validation
 
 Perform this on the actual demo devices and record the results in `docs/phase-zero-results.md`.
 
-1. Launch the watch app, grant sensor permission, wear the watch snugly, and wait for a non-placeholder BPM.
-2. Tap `Send to phone`; verify that the phone shows the BPM and a current wall-clock timestamp.
+1. Set `VITALS_SOURCE=watch`, launch both apps, and start a session on the phone.
+2. Grant sensor permission, wear the watch snugly, and verify that an automatic live BPM appears on the phone.
 3. Tap `Vibrate watch`; verify the two-pulse pattern once.
 4. Connect the earbuds, tap `Select earbuds`, and confirm their product name appears. `Phone-mic fallback active` means Android did not expose them as a communication input.
-5. Tap `Record + transcribe`, speak for five seconds, then stop. Confirm an intelligible final transcript appears and a non-empty `phase-zero-*.pcm` file is created in app cache.
+5. Start a session from the watch, speak for five seconds, and confirm an intelligible final transcript appears on the phone and in `session://current/transcript`.
 6. Start capture, tap `Play TTS`, and confirm TTS is private to the earbuds and status returns to `TTS complete; capture resumed`.
 7. Speak again and confirm another final transcript arrives after TTS.
 8. Run and inspect `phase_zero_probe` in NitroStudio.
 
-Raw `.pcm` clips are temporary app-cache artifacts and are not uploaded anywhere except the live Deepgram stream. Clear app storage after testing.
+Raw audio is streamed to Deepgram and is not written to app storage or exposed through MCP.
 
 ## Acceptance Boundary
 

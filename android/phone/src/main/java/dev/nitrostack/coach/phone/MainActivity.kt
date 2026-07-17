@@ -20,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -28,51 +29,25 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
-import com.google.android.gms.wearable.DataClient
-import com.google.android.gms.wearable.DataEvent
-import com.google.android.gms.wearable.DataEventBuffer
-import com.google.android.gms.wearable.DataMapItem
 import com.google.android.gms.wearable.Wearable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import java.text.DateFormat
-import java.util.Date
 
-class MainActivity : ComponentActivity(), DataClient.OnDataChangedListener {
-    private var heartRate by mutableStateOf("No watch reading")
-
+class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { MaterialTheme { PhaseZeroScreen() } }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        Wearable.getDataClient(this).addListener(this)
-    }
-
-    override fun onPause() {
-        Wearable.getDataClient(this).removeListener(this)
-        super.onPause()
-    }
-
-    override fun onDataChanged(events: DataEventBuffer) {
-        events.filter { it.type == DataEvent.TYPE_CHANGED && it.dataItem.uri.path == "/phase0/heart-rate" }
-            .forEach {
-                val data = DataMapItem.fromDataItem(it.dataItem).dataMap
-                val time = DateFormat.getTimeInstance().format(Date(data.getLong("timestamp")))
-                runOnUiThread {
-                    heartRate = "${data.getDouble("bpm").toInt()} BPM at $time (${data.getString("availability")})"
-                }
-            }
+        setContent { MaterialTheme { PulseScreen() } }
     }
 
     @Composable
-    private fun PhaseZeroScreen() {
-        val probe = remember { AudioProbe(this, lifecycleScope) }
-        val foundation = remember { FoundationClient(lifecycleScope) }
+    private fun PulseScreen() {
+        val application = remember { PulseApplication.instance(this) }
+        val probe = application.audioProbe
+        val pipeline = application.vitalPipeline
         val audio by probe.state.collectAsStateWithLifecycle()
-        val foundationStatus by foundation.status.collectAsStateWithLifecycle()
+        val vitals by pipeline.state.collectAsStateWithLifecycle()
+        var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
         var permissionGranted by remember {
             mutableStateOf(
                 ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED &&
@@ -84,31 +59,51 @@ class MainActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         }
         LaunchedEffect(Unit) {
             if (!permissionGranted) permission.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.BLUETOOTH_CONNECT))
-            foundation.checkHealth()
+            while (true) {
+                pipeline.setWatchConnected(Wearable.getNodeClient(this@MainActivity).connectedNodes.await().isNotEmpty())
+                now = System.currentTimeMillis()
+                delay(1_000)
+            }
         }
-        DisposableEffect(probe) { onDispose { probe.close() } }
-
-        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Pulse foundation", style = MaterialTheme.typography.headlineMedium)
-            Text("Vitals: ${BuildConfig.VITALS_SOURCE} | Audio: ${BuildConfig.AUDIO_INPUT}")
-            Text("Transcription: ${BuildConfig.TRANSCRIPTION_MODE} | Actions: ${BuildConfig.DEVICE_ACTIONS}")
-            Text(foundationStatus)
-            Text("Watch: $heartRate")
-            Text("Audio route: ${audio.route}")
-            Text(audio.status)
-            if (audio.transcript.isNotBlank()) Text("Final transcript: ${audio.transcript}")
+        val stale = isReadingStale(vitals.latestReceivedAtEpochMs, now)
+        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Pulse vitals", style = MaterialTheme.typography.headlineMedium)
+            if (BuildConfig.VITALS_SOURCE == "simulated") Text("SIMULATED VITALS", color = MaterialTheme.colorScheme.error)
+            Text("Session: ${vitals.sessionStatus} ${vitals.sessionId.orEmpty()}")
+            Text(vitals.latestBpm?.let {
+                "${it.toInt()} BPM - ${if (stale) "STALE" else "LIVE"} - ${vitals.source}"
+            } ?: "No heart-rate reading")
+            Text("Sensor: ${vitals.availability}")
+            Text("Watch: ${if (vitals.watchConnected) "connected" else "offline"} | Backend: ${if (vitals.backendConnected) "connected" else "offline"}")
+            Text("Upload queue: ${vitals.pendingEvents} | ${vitals.message}")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = application::startSession,
+                    enabled = vitals.sessionStatus !in setOf("calibrating", "active")
+                ) { Text("Start session") }
+                Button(
+                    onClick = application::endSession,
+                    enabled = vitals.sessionStatus in setOf("calibrating", "active")
+                ) { Text("End session") }
+            }
+            if (BuildConfig.DEBUG && BuildConfig.VITALS_SOURCE == "simulated") {
+                Button(onClick = { if (vitals.simulatorRunning) pipeline.stopSimulator() else pipeline.startSimulator() }) {
+                    Text(if (vitals.simulatorRunning) "Stop simulator" else "Run simulated sequence")
+                }
+            }
+            Text("Audio route: ${audio.route} | ${audio.status}")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { selectEarbudsOrFallback(probe) }, enabled = permissionGranted) { Text("Select earbuds") }
                 Button(onClick = { sendHaptic() }) { Text("Vibrate watch") }
             }
-            Button(onClick = foundation::sendMockSequence) { Text("Send mock events") }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { if (audio.capturing) probe.stopCapture() else probe.startCapture() }, enabled = permissionGranted) {
+                Button(onClick = { if (audio.capturing) probe.stopCapture() else probe.startCapture(pipeline.currentSessionElapsedMs()) }, enabled = permissionGranted) {
                     Text(if (audio.capturing) "Stop capture" else "Record + transcribe")
                 }
                 Button(onClick = probe::speakProbe, enabled = permissionGranted) { Text("Play TTS") }
             }
-            if (!permissionGranted) Text("Microphone and nearby-device permissions are required.")
+            if (audio.transcript.isNotBlank()) Text("Final transcript: ${audio.transcript}")
+            if (!permissionGranted) Text("Microphone and nearby-device permissions are required for audio probes.")
         }
     }
 
