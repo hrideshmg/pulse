@@ -30,7 +30,7 @@ import java.util.concurrent.TimeUnit
 
 private const val STALE_AFTER_MS = 10_000L
 private const val ACK_TIMEOUT_MS = 10_000L
-private const val HIGH_RESTING_HEART_RATE_BPM = 160.0
+private const val HIGH_RESTING_HEART_RATE_BPM = 85.0
 private const val HIGH_HEART_RATE_SUSTAINED_MS = 10_000L
 private const val HIGH_HEART_RATE_MAX_SAMPLE_GAP_MS = 5_000L
 private const val HIGH_HEART_RATE_ALERT_COOLDOWN_MS = 5 * 60_000L
