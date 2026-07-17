@@ -16,11 +16,19 @@ data class WatchState(
     val pendingEvents: Int = 0
 )
 
+data class HeartRateState(
+    val bpm: Double? = null,
+    val availability: String = "unknown",
+    val sensorSupported: Boolean? = null
+)
+
 object WatchStateStore {
     private const val PREFS = "pulse_watch_bridge"
     private const val PENDING = "pending_event_ids"
     private val mutableState = MutableStateFlow(WatchState())
     val state = mutableState.asStateFlow()
+    private val mutableHeartRate = MutableStateFlow(HeartRateState())
+    val heartRate = mutableHeartRate.asStateFlow()
 
     fun restore(context: Context) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -38,6 +46,7 @@ object WatchStateStore {
 
     fun updateSession(context: Context, sessionId: String, status: String, sessionElapsedAtSyncMs: Long) {
         val current = mutableState.value
+        val sessionChanged = current.sessionId != sessionId
         val alreadySynchronized = current.sessionId == sessionId && current.sessionClockSynchronized
         val startElapsed = if (alreadySynchronized) {
             current.sessionStartElapsedRealtimeMs
@@ -56,6 +65,27 @@ object WatchStateStore {
             sessionStatus = status,
             sessionStartElapsedRealtimeMs = startElapsed,
             sessionClockSynchronized = true
+        )
+        if (sessionChanged || status !in setOf("calibrating", "active")) {
+            updateHeartRate(
+                availability = if (status in setOf("calibrating", "active")) "acquiring" else "inactive",
+                clearBpm = true
+            )
+        }
+        HeartRateService.reconcile(context, status)
+    }
+
+    fun updateHeartRate(
+        bpm: Double? = null,
+        availability: String? = null,
+        sensorSupported: Boolean? = null,
+        clearBpm: Boolean = false
+    ) {
+        val current = mutableHeartRate.value
+        mutableHeartRate.value = current.copy(
+            bpm = if (clearBpm) null else bpm ?: current.bpm,
+            availability = availability ?: current.availability,
+            sensorSupported = sensorSupported ?: current.sensorSupported
         )
     }
 

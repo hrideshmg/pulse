@@ -5,11 +5,14 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { loadRuntimeConfig, type RuntimeConfig } from '../config.js';
 import { pulseEventSchema, type EventAcknowledgement } from '../contracts/events.js';
 import { sessionStatusSchema } from '../contracts/domain.js';
+import { sessionSearchInputSchema } from '../contracts/session-search.js';
+import { currentStressResponseSchema, currentVitalsResponseSchema } from '../contracts/vitals-resources.js';
 import { localHealth } from '../health.js';
 import { StructuredLogger } from '../observability/logger.js';
 import { EventStore } from './event-store.js';
 
 const MAX_BODY_BYTES = 1_000_000;
+const VITAL_STALE_AFTER_MS = 10_000;
 
 export interface Backend {
   server: Server;
@@ -20,7 +23,7 @@ export interface Backend {
 
 export function createBackend(config: RuntimeConfig = loadRuntimeConfig()): Backend {
   const logger = new StructuredLogger('backend', config.LOG_LEVEL);
-  const store = new EventStore(logger);
+  const store = new EventStore(logger, config.DATABASE_PATH);
   const websocketServer = new WebSocketServer({ noServer: true });
   const server = createServer(async (request, response) => {
     try {
@@ -44,6 +47,7 @@ export function createBackend(config: RuntimeConfig = loadRuntimeConfig()): Back
     });
   });
   websocketServer.on('connection', (socket) => handleSessionStream(socket, store, logger));
+  server.on('close', () => store.close());
   return { server, store, logger, websocketServer };
 }
 
@@ -126,6 +130,69 @@ async function route(
     return;
   }
 
+  if (request.method === 'GET' && url.pathname === '/v1/sessions/current/vitals') {
+    const session = requireReadableCurrentSession(store);
+    const samples = store.getVitalSamples(session.sessionId);
+    const latest = samples.at(-1) ?? null;
+    const observedAt = store.getLatestVitalObservedAt(session.sessionId);
+    const ageMs = observedAt ? Math.max(0, Date.now() - Date.parse(observedAt)) : null;
+    sendJson(response, 200, currentVitalsResponseSchema.parse({
+      session,
+      consentAllowed: store.hasActiveConsent(session.sessionId, 'read:vitals'),
+      latest,
+      freshness: observedAt && ageMs !== null ? {
+        status: ageMs > VITAL_STALE_AFTER_MS ? 'stale' : 'live',
+        observedAt,
+        ageMs,
+        staleAfterMs: VITAL_STALE_AFTER_MS
+      } : null,
+      window: samples.slice(-30)
+    }));
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/v1/sessions/current/stress') {
+    const session = requireReadableCurrentSession(store);
+    const stressSignal = store.getStressSignal(session.sessionId);
+    sendJson(response, 200, currentStressResponseSchema.parse({
+      session,
+      consentAllowed: store.hasActiveConsent(session.sessionId, 'read:vitals'),
+      signal: withoutEvidence(stressSignal)
+    }));
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/v1/transcripts/latest') {
+    const latest = store.getLatestTranscript();
+    sendJson(response, 200, latest ?? { session: null, segment: null });
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/v1/sessions/current/speech-metrics') {
+    const session = store.getCurrentSession();
+    if (!session) {
+      sendJson(response, 200, { session: null, metrics: null });
+      return;
+    }
+    sendJson(response, 200, { session, metrics: store.getSpeechMetrics(session.sessionId) });
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/v1/sessions/search') {
+    const input = sessionSearchInputSchema.parse(await readJson(request));
+    sendJson(response, 200, store.searchSessions(input));
+    return;
+  }
+
+  const transcriptMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/transcript$/);
+  if (request.method === 'GET' && transcriptMatch) {
+    const sessionId = decodeURIComponent(transcriptMatch[1]);
+    const session = store.getSession(sessionId);
+    if (!session) throw new Error(`Unknown session: ${sessionId}`);
+    sendJson(response, 200, { session, segments: store.getTranscriptSegments(sessionId) });
+    return;
+  }
+
   const eventMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/events$/);
   if (request.method === 'GET' && eventMatch) {
     const sessionId = decodeURIComponent(eventMatch[1]);
@@ -147,6 +214,23 @@ async function route(
     return;
   }
 
+  const stressEventsMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/stress-events$/);
+  if (request.method === 'GET' && stressEventsMatch) {
+    const sessionId = decodeURIComponent(stressEventsMatch[1]);
+    if (!store.getSession(sessionId)) throw new Error(`Unknown session: ${sessionId}`);
+    sendJson(response, 200, { sessionId, transitions: store.getStressTransitions(sessionId) });
+    return;
+  }
+
+  const reportMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/report$/);
+  if (request.method === 'GET' && reportMatch) {
+    const sessionId = decodeURIComponent(reportMatch[1]);
+    const report = store.getSessionReport(sessionId);
+    if (!report) throw new Error(`Unknown session: ${sessionId}`);
+    sendJson(response, 200, report);
+    return;
+  }
+
   const transitionMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/status$/);
   if (request.method === 'PATCH' && transitionMatch) {
     const sessionId = decodeURIComponent(transitionMatch[1]);
@@ -156,6 +240,20 @@ async function route(
   }
 
   sendJson(response, 404, { error: `Route not found: ${request.method} ${url.pathname}` });
+}
+
+function withoutEvidence<T extends { evidence?: unknown }>(signal: T | undefined): Omit<T, 'evidence'> | null {
+  if (signal === undefined) return null;
+  const { evidence: _evidence, ...publicSignal } = signal;
+  return publicSignal;
+}
+function requireReadableCurrentSession(store: EventStore) {
+  const session = store.getCurrentSession();
+  if (!session) throw new Error('No current session');
+  if (session.status !== 'calibrating' && session.status !== 'active') {
+    throw new Error(`Current session is not readable: ${session.sessionId} (${session.status})`);
+  }
+  return session;
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {

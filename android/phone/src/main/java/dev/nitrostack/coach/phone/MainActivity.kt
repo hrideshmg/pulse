@@ -34,6 +34,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
+fun heartRateDisplay(bpm: Double?, stale: Boolean, source: String): String = when {
+    bpm == null -> "No heart-rate reading"
+    stale -> "No live heart-rate reading - STALE - $source"
+    else -> "${bpm.toInt()} BPM - LIVE - $source"
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,13 +72,13 @@ class MainActivity : ComponentActivity() {
             }
         }
         val stale = isReadingStale(vitals.latestReceivedAtEpochMs, now)
+        val latestBpm = vitals.latestBpm
         Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Pulse vitals", style = MaterialTheme.typography.headlineMedium)
             if (BuildConfig.VITALS_SOURCE == "simulated") Text("SIMULATED VITALS", color = MaterialTheme.colorScheme.error)
             Text("Session: ${vitals.sessionStatus} ${vitals.sessionId.orEmpty()}")
-            Text(vitals.latestBpm?.let {
-                "${it.toInt()} BPM - ${if (stale) "STALE" else "LIVE"} - ${vitals.source}"
-            } ?: "No heart-rate reading")
+            Text(if (vitals.sessionStatus in setOf("calibrating", "active")) "Agent vitals access: consented for this session" else "Agent vitals access: off")
+            Text(heartRateDisplay(latestBpm, stale, vitals.source))
             Text("Sensor: ${vitals.availability}")
             Text("Exercise mode: ${if (vitals.exerciseMode) "on" else "off"}")
             Text("Watch: ${if (vitals.watchConnected) "connected" else "offline"} | Backend: ${if (vitals.backendConnected) "connected" else "offline"}")
@@ -108,6 +114,7 @@ class MainActivity : ComponentActivity() {
                 Button(onClick = probe::speakProbe, enabled = permissionGranted) { Text("Play TTS") }
             }
             if (audio.transcript.isNotBlank()) Text("Final transcript: ${audio.transcript}")
+            if (audio.interimTranscript.isNotBlank()) Text("Live caption: ${audio.interimTranscript}")
             if (!permissionGranted) Text("Microphone and nearby-device permissions are required for audio probes.")
         }
     }

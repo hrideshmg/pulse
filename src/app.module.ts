@@ -1,7 +1,12 @@
 import { McpApp, Module } from '@nitrostack/core';
-import { HealthResources } from './health.resources.js';
 import { PhaseZeroTools } from './phase-zero.tools.js';
 import { TranscriptResources } from './transcript.resources.js';
+import { SessionTools } from './session.tools.js';
+import { VitalsResources } from './vitals.resources.js';
+import { VitalsResourceNotifier } from './vitals-resource-notifier.js';
+import { SpeechMetricsResources } from './speech-metrics.resources.js';
+import { SessionReportPrompts, SessionReportResources, SessionReportTools } from './session-report.mcp.js';
+import { CurrentSessionTools } from './current-session.tools.js';
 
 @McpApp({
   module: AppModule,
@@ -10,6 +15,17 @@ import { TranscriptResources } from './transcript.resources.js';
 })
 @Module({
   name: 'pulse-foundation',
-  controllers: [HealthResources, TranscriptResources, PhaseZeroTools]
+  controllers: [
+    VitalsResources,
+    TranscriptResources,
+    SpeechMetricsResources,
+    SessionReportResources,
+    SessionReportTools,
+    SessionReportPrompts,
+    CurrentSessionTools,
+    SessionTools,
+    PhaseZeroTools
+  ],
+  providers: [VitalsResourceNotifier]
 })
 export class AppModule {}

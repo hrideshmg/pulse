@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -31,7 +32,8 @@ data class AudioProbeState(
     val route: String = "Phone microphone",
     val capturing: Boolean = false,
     val status: String = "Ready",
-    val transcript: String = ""
+    val transcript: String = "",
+    val interimTranscript: String = ""
 )
 
 data class FinalTranscriptSegment(
@@ -44,15 +46,19 @@ data class FinalTranscriptSegment(
 class AudioProbe(
     private val context: Context,
     private val scope: CoroutineScope,
+    private val currentTimelineMs: () -> Long = { 0L },
     private val onFinalTranscript: (FinalTranscriptSegment) -> Unit = {}
 ) : TextToSpeech.OnInitListener {
     val state = MutableStateFlow(AudioProbeState())
     private val audioManager = context.getSystemService(AudioManager::class.java)
+    private val client = OkHttpClient()
     private val tts = TextToSpeech(context, this)
     private var selectedDevice: AudioDeviceInfo? = null
     private var captureJob: Job? = null
     private var recorder: AudioRecord? = null
     private var socket: WebSocket? = null
+    private var reconnectJob: Job? = null
+    private var reconnectAttempt = 0
     private var captureTimelineOffsetMs = 0L
 
     override fun onInit(result: Int) {
@@ -92,9 +98,8 @@ class AudioProbe(
             .build()
         selectedDevice?.let(newRecorder::setPreferredDevice)
         recorder = newRecorder
-        socket = openTranscriptionSocket()
         newRecorder.startRecording()
-        state.value = state.value.copy(capturing = true, status = "Streaming transcription")
+        state.value = state.value.copy(capturing = true, status = "Connecting transcription", interimTranscript = "")
         captureJob = scope.launch(Dispatchers.IO) {
             val buffer = ByteArray(minimum)
             while (currentCoroutineContext().isActive) {
@@ -104,11 +109,14 @@ class AudioProbe(
                 }
             }
         }
+        socket = openTranscriptionSocket()
     }
 
     fun stopCapture(onStopped: (() -> Unit)? = null) {
         val job = captureJob ?: run { onStopped?.invoke(); return }
         captureJob = null
+        reconnectJob?.cancel()
+        reconnectJob = null
         scope.launch {
             recorder?.stop()
             job.cancelAndJoin()
@@ -117,7 +125,7 @@ class AudioProbe(
             socket?.send("{\"type\":\"Finalize\"}")
             socket?.close(1000, "capture complete")
             socket = null
-            state.value = state.value.copy(capturing = false, status = "Capture stopped")
+            state.value = state.value.copy(capturing = false, status = "Capture stopped", interimTranscript = "")
             onStopped?.invoke()
         }
     }
@@ -147,7 +155,7 @@ class AudioProbe(
 
     private fun resumeAfterTts() {
         scope.launch(Dispatchers.Main) {
-            startCapture()
+            startCapture(currentTimelineMs())
             state.value = state.value.copy(status = "TTS complete; capture resumed")
         }
     }
@@ -161,30 +169,58 @@ class AudioProbe(
             .url("wss://api.deepgram.com/v1/listen?model=nova-3&language=en-US&encoding=linear16&sample_rate=16000&channels=1&punctuate=true&interim_results=true")
             .header("Authorization", "Token ${BuildConfig.DEEPGRAM_API_KEY}")
             .build()
-        return OkHttpClient().newWebSocket(request, object : WebSocketListener() {
+        return client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (webSocket != socket) return
+                reconnectAttempt = 0
                 state.value = state.value.copy(status = "Deepgram stream connected")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (webSocket != socket) return
                 val json = JSONObject(text)
-                if (!json.optBoolean("is_final")) return
-                val transcript = json.optJSONObject("channel")
-                    ?.optJSONArray("alternatives")?.optJSONObject(0)?.optString("transcript").orEmpty()
+                val alternative = json.optJSONObject("channel")?.optJSONArray("alternatives")?.optJSONObject(0)
+                val transcript = alternative?.optString("transcript").orEmpty()
+                if (!json.optBoolean("is_final")) {
+                    state.value = state.value.copy(interimTranscript = transcript)
+                    return
+                }
                 if (transcript.isNotBlank()) {
-                    val alternative = json.optJSONObject("channel")?.optJSONArray("alternatives")?.optJSONObject(0)
                     val startMs = captureTimelineOffsetMs + (json.optDouble("start", 0.0) * 1_000).toLong()
                     val endMs = startMs + (json.optDouble("duration", 0.0) * 1_000).toLong()
                     val confidence = alternative?.optDouble("confidence")?.takeUnless { it.isNaN() }
-                    state.value = state.value.copy(transcript = transcript, status = "Final transcript uploaded")
+                    state.value = state.value.copy(
+                        transcript = transcript,
+                        interimTranscript = "",
+                        status = "Final transcript uploaded"
+                    )
                     onFinalTranscript(FinalTranscriptSegment(transcript, startMs, endMs, confidence))
                 }
             }
 
             override fun onFailure(webSocket: WebSocket, error: Throwable, response: Response?) {
-                state.value = state.value.copy(status = "Transcription failed: ${error.message}")
+                reconnect(webSocket, error.message ?: "connection failed")
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                reconnect(webSocket, "connection closed")
             }
         })
+    }
+
+    private fun reconnect(failedSocket: WebSocket, reason: String) {
+        if (failedSocket != socket) return
+        socket = null
+        if (!state.value.capturing || reconnectJob?.isActive == true) return
+        reconnectJob = scope.launch {
+            val waitMs = 1_000L shl reconnectAttempt.coerceAtMost(4)
+            reconnectAttempt++
+            state.value = state.value.copy(status = "Transcription reconnecting in ${waitMs / 1_000}s: $reason")
+            delay(waitMs)
+            if (!state.value.capturing) return@launch
+            captureTimelineOffsetMs = currentTimelineMs()
+            socket = openTranscriptionSocket()
+        }
     }
 
     fun close() {
