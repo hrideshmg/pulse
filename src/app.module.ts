@@ -1,6 +1,7 @@
 import { McpApp, Module } from '@nitrostack/core';
 import { HealthResources } from './health.resources.js';
 import { PhaseZeroTools } from './phase-zero.tools.js';
+import { PulseResources } from './pulse.resources.js';
 
 @McpApp({
   module: AppModule,
@@ -8,7 +9,7 @@ import { PhaseZeroTools } from './phase-zero.tools.js';
   logging: { level: 'info' }
 })
 @Module({
-  name: 'pulse-foundation',
-  controllers: [HealthResources, PhaseZeroTools]
+  name: 'phase-zero',
+  controllers: [PhaseZeroTools, PulseResources, HealthResources]
 })
 export class AppModule {}

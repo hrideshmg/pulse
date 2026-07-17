@@ -1,0 +1,424 @@
+{
+  "version": "1.0.0",
+  "widgets": [
+    {
+      "uri": "/vitals-monitor",
+      "name": "Vitals Monitor",
+      "description": "Live BPM gauge with heart-rate sparkline, staleness indicator, and source label",
+      "examples": [
+        {
+          "name": "Elevated Heart Rate",
+          "description": "Wearer at 112 BPM, sustained elevation",
+          "data": {
+            "bpm": 112,
+            "availability": "available",
+            "source": "watch",
+            "freshness": "2s ago",
+            "window": [78, 82, 88, 95, 104, 112],
+            "windowLabels": ["0:00", "0:10", "0:20", "0:30", "0:40", "0:50"]
+          }
+        },
+        {
+          "name": "Baseline Resting",
+          "description": "Wearer at 72 BPM, calm state",
+          "data": {
+            "bpm": 72,
+            "availability": "available",
+            "source": "watch",
+            "freshness": "1s ago",
+            "window": [70, 71, 72, 73, 72, 71, 72],
+            "windowLabels": ["0:00", "0:10", "0:20", "0:30", "0:40", "0:50", "1:00"]
+          }
+        },
+        {
+          "name": "Sensor Unavailable",
+          "description": "Watch sensor lost contact",
+          "data": {
+            "bpm": null,
+            "availability": "unavailable",
+            "source": "watch",
+            "freshness": "stale",
+            "window": [],
+            "windowLabels": []
+          }
+        }
+      ],
+      "tags": ["vitals", "heart-rate", "real-time"]
+    },
+    {
+      "uri": "/stress-indicator",
+      "name": "Stress Indicator",
+      "description": "Derived stress state badge with baseline delta, elevation duration, and evidence summary",
+      "examples": [
+        {
+          "name": "Sustained Elevation",
+          "description": "Stress state is sustained_elevation for 2m 14s",
+          "data": {
+            "state": "sustained_elevation",
+            "baselineBpm": 72,
+            "currentDelta": 38,
+            "elevationDuration": "2m 14s",
+            "elevationStart": "14:32:05",
+            "evidence": "Heart rate sustained above 105 BPM for over 2 minutes during pricing discussion",
+            "cooldownActive": false
+          }
+        },
+        {
+          "name": "Baseline",
+          "description": "No stress detected",
+          "data": {
+            "state": "baseline",
+            "baselineBpm": 72,
+            "currentDelta": 2,
+            "elevationDuration": null,
+            "elevationStart": null,
+            "evidence": null,
+            "cooldownActive": false
+          }
+        },
+        {
+          "name": "Recovering",
+          "description": "Heart rate returning to baseline after elevation",
+          "data": {
+            "state": "recovering",
+            "baselineBpm": 72,
+            "currentDelta": 12,
+            "elevationDuration": "1m 45s",
+            "elevationStart": "14:30:22",
+            "evidence": "Heart rate dropping from peak of 118 BPM after haptic nudge intervention",
+            "cooldownActive": true
+          }
+        }
+      ],
+      "tags": ["stress", "derived", "vitals"]
+    },
+    {
+      "uri": "/session-context-card",
+      "name": "Session Context",
+      "description": "Wearer summary, situation, participants, goals, and topics to avoid",
+      "examples": [
+        {
+          "name": "Sales Pitch Session",
+          "description": "High-stakes pricing conversation",
+          "data": {
+            "wearerSummary": "Senior software engineer, 8 years experience. Tends to rush speech when nervous. Prefers direct communication.",
+            "situation": "Live sales pitch to potential enterprise client. Pricing negotiation phase.",
+            "participants": ["Client CTO (decision maker)", "Client procurement lead"],
+            "goals": ["Close the deal at listed price", "Demonstrate technical superiority", "Build long-term relationship"],
+            "topicsToAvoid": ["Competitor names", "Past failures", "Uncommitted timelines"]
+          }
+        },
+        {
+          "name": "Job Interview",
+          "description": "Technical interview at a startup",
+          "data": {
+            "wearerSummary": "Mid-level developer, 4 years experience. First interview at this company.",
+            "situation": "Remote technical interview for a senior role. System design round.",
+            "participants": ["Hiring manager", "Team lead"],
+            "goals": ["Demonstrate system design skills", "Show cultural fit", "Ask about growth path"],
+            "topicsToAvoid": ["Salary expectations (too early)", "Previous employer negatives"]
+          }
+        }
+      ],
+      "tags": ["context", "session", "metadata"]
+    },
+    {
+      "uri": "/transcript-viewer",
+      "name": "Transcript Viewer",
+      "description": "Scrolling speaker-labeled transcript with timestamps",
+      "examples": [
+        {
+          "name": "Pricing Discussion",
+          "description": "Segment where stress was detected",
+          "data": {
+            "segments": [
+              { "segmentId": "s1", "speaker": "participant", "text": "We need to understand the pricing model better before committing.", "startTime": "0:42", "endTime": "0:48", "confidence": 0.96, "status": "final" },
+              { "segmentId": "s2", "speaker": "wearer", "text": "Absolutely. Our pricing is designed to scale with your usage. You only pay for what you actually use.", "startTime": "0:48", "endTime": "0:56", "confidence": 0.94, "status": "final" },
+              { "segmentId": "s3", "speaker": "participant", "text": "That sounds like it could get expensive at our scale. Can you give us a ceiling?", "startTime": "0:57", "endTime": "1:03", "confidence": 0.91, "status": "final" },
+              { "segmentId": "s4", "speaker": "wearer", "text": "We can discuss enterprise tier pricing which includes a cap. Let me walk you through the options.", "startTime": "1:04", "endTime": "1:11", "confidence": 0.93, "status": "final" }
+            ],
+            "totalSegments": 4,
+            "lastUpdated": "1:11"
+          }
+        }
+      ],
+      "tags": ["transcript", "speech", "conversation"]
+    },
+    {
+      "uri": "/speech-metrics-panel",
+      "name": "Speech Metrics",
+      "description": "Words per minute, filler rate, turn length, and silence duration",
+      "examples": [
+        {
+          "name": "Normal Speech",
+          "description": "Wearer speaking at a comfortable pace",
+          "data": {
+            "wordsPerMinute": 145,
+            "fillersPerMinute": 2.1,
+            "longestTurnSeconds": 18,
+            "currentSilenceSeconds": 3,
+            "totalFillers": 5,
+            "totalWords": 340,
+            "sessionDuration": "4m 22s"
+          }
+        },
+        {
+          "name": "Rushed Speech",
+          "description": "Wearer speaking quickly under pressure",
+          "data": {
+            "wordsPerMinute": 198,
+            "fillersPerMinute": 8.5,
+            "longestTurnSeconds": 32,
+            "currentSilenceSeconds": 1,
+            "totalFillers": 18,
+            "totalWords": 520,
+            "sessionDuration": "3m 45s"
+          }
+        }
+      ],
+      "tags": ["speech", "metrics", "analysis"]
+    },
+    {
+      "uri": "/session-report",
+      "name": "Session Report",
+      "description": "HR-synced timeline with transcript, vitals, and intervention markers",
+      "examples": [
+        {
+          "name": "Complete Session",
+          "description": "Full session with stress episodes and interventions",
+          "data": {
+            "sessionId": "sess_abc123",
+            "duration": "12m 34s",
+            "summary": {
+              "averageBpm": 88,
+              "peakBpm": 118,
+              "stressEpisodes": 2,
+              "interventions": 1,
+              "averageRecoveryTime": "1m 22s"
+            },
+            "timeline": [
+              { "time": "0:00", "type": "vitals", "bpm": 72, "state": "baseline" },
+              { "time": "2:15", "type": "transcript", "speaker": "wearer", "text": "Let me walk you through our architecture..." },
+              { "time": "3:42", "type": "vitals", "bpm": 95, "state": "elevated" },
+              { "time": "4:10", "type": "vitals", "bpm": 108, "state": "sustained_elevation" },
+              { "time": "4:15", "type": "intervention", "tool": "haptic_nudge", "result": "delivered" },
+              { "time": "5:30", "type": "vitals", "bpm": 88, "state": "recovering" },
+              { "time": "6:00", "type": "vitals", "bpm": 74, "state": "baseline" }
+            ]
+          }
+        }
+      ],
+      "tags": ["report", "timeline", "analysis"]
+    },
+    {
+      "uri": "/audit-log-table",
+      "name": "Audit Log",
+      "description": "Filterable table of resource reads and tool calls with consent checks",
+      "examples": [
+        {
+          "name": "Co-Regulation Session",
+          "description": "Audit entries from a complete co-regulation loop",
+          "data": {
+            "entries": [
+              { "auditId": "a1", "timestamp": "14:30:01", "kind": "resource_read", "subject": "session://current/vitals", "consentScope": "read:vitals", "consentResult": "granted", "outcome": "success" },
+              { "auditId": "a2", "timestamp": "14:30:02", "kind": "resource_read", "subject": "session://current/stress", "consentScope": "read:vitals", "consentResult": "granted", "outcome": "success" },
+              { "auditId": "a3", "timestamp": "14:30:03", "kind": "resource_read", "subject": "session://current/context", "consentScope": "read:context", "consentResult": "granted", "outcome": "success" },
+              { "auditId": "a4", "timestamp": "14:30:04", "kind": "resource_read", "subject": "session://current/transcript", "consentScope": "read:transcript", "consentResult": "granted", "outcome": "success" },
+              { "auditId": "a5", "timestamp": "14:32:15", "kind": "tool_call", "subject": "haptic_nudge", "consentScope": "act:haptic", "consentResult": "granted", "outcome": "delivered", "args": { "pattern": "calm_double" }, "correlationId": "corr_1" },
+              { "auditId": "a6", "timestamp": "14:34:20", "kind": "tool_call", "subject": "whisper_coach", "consentScope": "act:audio", "consentResult": "granted", "outcome": "played", "args": { "message": "Take a breath. You've got this." }, "correlationId": "corr_2" }
+            ],
+            "totalEntries": 6,
+            "filteredBy": null
+          }
+        }
+      ],
+      "tags": ["audit", "log", "compliance"]
+    },
+    {
+      "uri": "/device-status-bar",
+      "name": "Device Status",
+      "description": "Connection state indicators for watch and audio devices",
+      "examples": [
+        {
+          "name": "All Connected",
+          "description": "Watch and earbuds both connected",
+          "data": {
+            "watch": { "connected": true, "name": "Pixel Watch 3", "batteryLevel": 78, "signalStrength": "strong" },
+            "audio": { "connected": true, "name": "Pixel Buds Pro 2", "route": "earbuds", "batteryLevel": 62 }
+          }
+        },
+        {
+          "name": "Watch Disconnected",
+          "description": "Watch lost connection, earbuds fine",
+          "data": {
+            "watch": { "connected": false, "name": "Pixel Watch 3", "batteryLevel": 12, "signalStrength": "none" },
+            "audio": { "connected": true, "name": "Pixel Buds Pro 2", "route": "earbuds", "batteryLevel": 62 }
+          }
+        },
+        {
+          "name": "Phone Mic Fallback",
+          "description": "Earbuds not available, using phone microphone",
+          "data": {
+            "watch": { "connected": true, "name": "Pixel Watch 3", "batteryLevel": 78, "signalStrength": "strong" },
+            "audio": { "connected": false, "name": null, "route": "phone", "batteryLevel": null }
+          }
+        }
+      ],
+      "tags": ["device", "status", "connectivity"]
+    },
+    {
+      "uri": "/haptic-feedback",
+      "name": "Haptic Feedback",
+      "description": "Confirmation card showing haptic pattern dispatched and delivery result",
+      "examples": [
+        {
+          "name": "Delivered",
+          "description": "Haptic nudge successfully delivered to watch",
+          "data": {
+            "tool": "haptic_nudge",
+            "pattern": "calm_double",
+            "status": "delivered",
+            "requestedAt": "14:32:15",
+            "deliveredAt": "14:32:16",
+            "latencyMs": 842,
+            "interventionId": "int_001"
+          }
+        },
+        {
+          "name": "Failed",
+          "description": "Watch disconnected, haptic could not be delivered",
+          "data": {
+            "tool": "haptic_nudge",
+            "pattern": "calm_double",
+            "status": "failed",
+            "requestedAt": "14:45:02",
+            "deliveredAt": null,
+            "latencyMs": null,
+            "interventionId": "int_002",
+            "error": "Watch not connected"
+          }
+        }
+      ],
+      "tags": ["haptic", "intervention", "watch"]
+    },
+    {
+      "uri": "/whisper-preview",
+      "name": "Whisper Preview",
+      "description": "Shows the text queued for TTS playback and delivery status",
+      "examples": [
+        {
+          "name": "Delivered",
+          "description": "Coaching message played through earbuds",
+          "data": {
+            "tool": "whisper_coach",
+            "message": "Take a breath. You've got this. The pricing discussion is going well.",
+            "status": "played",
+            "requestedAt": "14:34:20",
+            "playedAt": "14:34:24",
+            "durationMs": 3200,
+            "interventionId": "int_003"
+          }
+        },
+        {
+          "name": "Queued",
+          "description": "Message waiting for a safe playback window",
+          "data": {
+            "tool": "whisper_coach",
+            "message": "Pause here. Let them respond before continuing.",
+            "status": "queued",
+            "requestedAt": "14:38:10",
+            "playedAt": null,
+            "durationMs": null,
+            "interventionId": "int_004",
+            "queueReason": "Waiting for wearer to finish speaking"
+          }
+        }
+      ],
+      "tags": ["whisper", "intervention", "audio"]
+    },
+    {
+      "uri": "/transcript-window",
+      "name": "Transcript Window",
+      "description": "Parameterized transcript slice with speaker labels",
+      "examples": [
+        {
+          "name": "Last 60 Seconds",
+          "description": "Transcript from the last minute of conversation",
+          "data": {
+            "windowStart": "14:33:20",
+            "windowEnd": "14:34:20",
+            "segments": [
+              { "segmentId": "s12", "speaker": "wearer", "text": "Our enterprise tier includes dedicated support and a usage cap.", "startTime": "14:33:22", "endTime": "14:33:30", "confidence": 0.95 },
+              { "segmentId": "s13", "speaker": "participant", "text": "What does the cap look like in practice?", "startTime": "14:33:32", "endTime": "14:33:36", "confidence": 0.92 },
+              { "segmentId": "s14", "speaker": "wearer", "text": "For your team size, you'd likely never hit it. Let me pull up the numbers.", "startTime": "14:33:38", "endTime": "14:33:45", "confidence": 0.94 }
+            ],
+            "segmentCount": 3
+          }
+        }
+      ],
+      "tags": ["transcript", "window", "parameterized"]
+    },
+    {
+      "uri": "/report-renderer",
+      "name": "Report Renderer",
+      "description": "Full HR-synced timeline visualization with scrubber",
+      "examples": [
+        {
+          "name": "Full Report",
+          "description": "Complete session report with vitals curve and transcript alignment",
+          "data": {
+            "sessionId": "sess_abc123",
+            "reportGenerated": "2026-07-17T15:30:00Z",
+            "summary": {
+              "duration": "12m 34s",
+              "averageBpm": 88,
+              "peakBpm": 118,
+              "stressEpisodes": 2,
+              "interventions": 1,
+              "averageRecoveryTime": "1m 22s",
+              "transcriptSegments": 47,
+              "totalWords": 1840
+            },
+            "vitalsCurve": [
+              { "t": 0, "bpm": 72 },
+              { "t": 30, "bpm": 74 },
+              { "t": 60, "bpm": 78 },
+              { "t": 90, "bpm": 95 },
+              { "t": 120, "bpm": 108 },
+              { "t": 150, "bpm": 112 },
+              { "t": 180, "bpm": 118 },
+              { "t": 210, "bpm": 102 },
+              { "t": 240, "bpm": 88 },
+              { "t": 270, "bpm": 78 }
+            ],
+            "interventions": [
+              { "time": "3:30", "tool": "haptic_nudge", "result": "delivered" }
+            ]
+          }
+        }
+      ],
+      "tags": ["report", "visualization", "timeline"]
+    },
+    {
+      "uri": "/audit-query-results",
+      "name": "Audit Query Results",
+      "description": "Filtered audit entries from query_audit_log tool",
+      "examples": [
+        {
+          "name": "Tool Calls Only",
+          "description": "All tool calls in the session",
+          "data": {
+            "query": { "kind": "tool_call" },
+            "results": [
+              { "auditId": "a5", "timestamp": "14:32:15", "tool": "haptic_nudge", "args": { "pattern": "calm_double" }, "consentScope": "act:haptic", "outcome": "delivered", "correlationId": "corr_1" },
+              { "auditId": "a6", "timestamp": "14:34:20", "tool": "whisper_coach", "args": { "message": "Take a breath." }, "consentScope": "act:audio", "outcome": "played", "correlationId": "corr_2" }
+            ],
+            "totalMatches": 2
+          }
+        }
+      ],
+      "tags": ["audit", "query", "filtered"]
+    }
+  ],
+  "generatedAt": "2026-07-17T00:00:00.000Z"
+}
