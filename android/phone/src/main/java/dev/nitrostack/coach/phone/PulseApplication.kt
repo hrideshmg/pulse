@@ -19,7 +19,7 @@ class PulseApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        vitalPipeline = VitalPipeline(this)
+        vitalPipeline = VitalPipeline(this) { audioProbe.speakHighHeartRateAlert() }
         audioProbe = AudioProbe(
             context = this,
             scope = applicationScope,

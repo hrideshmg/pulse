@@ -67,6 +67,7 @@ android\gradlew.bat :contracts:testDebugUnitTest
 - `GET /v1/sessions/current/speech-metrics`: pace, turn length, and current silence
 - `POST /v1/sessions/search`: transcript FTS5 search with date and status filters
 - `PATCH /v1/sessions/{sessionId}/status`: lifecycle transition validation
+- `GET /v1/sessions/{sessionId}/report`: deterministic per-session summary and chronological evidence timeline
 
 Backend storage uses SQLite at `DATABASE_PATH` (`data/pulse.sqlite` by default). Event acknowledgement follows the committing transaction, and event IDs remain deduplicated across backend restarts. Final transcript text is indexed with SQLite FTS5; raw audio is never stored.
 
@@ -76,6 +77,7 @@ Backend storage uses SQLite at `DATABASE_PATH` (`data/pulse.sqlite` by default).
 - `session://current/vitals`: consent-scoped latest BPM, availability, source, freshness, and rolling window
 - `session://current/stress`: consent-scoped backend-derived stress state with baseline, delta, duration, and cooldown
 - `session://{sessionId}/transcript`: stored transcript for a selected session
+- `session://{sessionId}/report`: stored HR-synced report for a selected session
 
 Vitals and stress resources require an active `read:vitals` grant for the current session. Authenticated callers must include the `read:vitals` scope; if their auth claims include a `sessionId`, it must match the current session. Every MCP vitals-resource read logs the resource boundary, correlation ID, session ID, consent scope, and authorization result.
 

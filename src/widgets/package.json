@@ -4,21 +4,22 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev -p 3001 --port 3001",
+    "dev": "next dev --port 3001",
     "build": "next build",
-    "start": "next start -p 3001",
+    "start": "next start --port 3001",
     "test": "next build"
   },
   "dependencies": {
+    "@modelcontextprotocol/ext-apps": "1.7.4",
     "@nitrostack/widgets": "^1.0.8",
-    "next": "^14.2.5",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "next": "^15.5.7",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "@types/react": "^18.0.0",
-    "@types/react-dom": "^18.0.0",
-    "typescript": "^5.0.0"
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.3.3"
   }
 }

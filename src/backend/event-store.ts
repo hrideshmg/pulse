@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import type { ConsentGrant, ConsentScope, Intervention, Session, SessionContext, SpeechMetricSnapshot, StressSignal, TranscriptSegment, VitalSample } from '../contracts/domain.js';
-import { interventionSchema, sessionContextSchema, sessionSchema, transcriptSegmentSchema, vitalSampleSchema } from '../contracts/domain.js';
+import { interventionSchema, sessionContextSchema, sessionSchema, speechMetricSnapshotSchema, transcriptSegmentSchema, vitalSampleSchema } from '../contracts/domain.js';
 import type { InterventionActionResponse } from '../contracts/interventions.js';
 import type { EventAcknowledgement, PulseEvent } from '../contracts/events.js';
 import { pulseEventSchema } from '../contracts/events.js';
@@ -14,6 +14,8 @@ import { assertSessionTransition } from '../contracts/lifecycle.js';
 import type { StructuredLogger } from '../observability/logger.js';
 import { deriveStressTimeline } from './stress-engine.js';
 import { deriveSpeechMetrics } from './speech-metrics.js';
+import { deriveSessionReport } from './session-report.js';
+import type { SessionReport } from '../contracts/session-report.js';
 
 interface JsonRow { json: string }
 interface SearchRow { session_json: string; transcript_excerpt: string; rank: number }
@@ -59,6 +61,7 @@ export class EventStore {
         `).run(event.eventId, event.sessionId, event.payload.sessionElapsedMs,
           event.payload.deviceTimestamp, JSON.stringify(event.payload));
         this.rebuildStressTimeline(event.sessionId);
+        this.persistSpeechMetrics(event.sessionId);
       }
       if (event.type === 'transcript_segment_received' && event.payload.isFinal) {
         this.database.prepare(`
@@ -69,6 +72,7 @@ export class EventStore {
         this.database.prepare(`
           INSERT INTO transcript_search (session_id, segment_id, text) VALUES (?, ?, ?)
         `).run(event.sessionId, event.payload.segmentId, event.payload.text);
+        this.persistSpeechMetrics(event.sessionId);
       }
       if (event.type === 'session_context_updated') {
         this.storeContext(event.payload);
@@ -91,6 +95,7 @@ export class EventStore {
       if (event.type === 'playback_completed' || event.type === 'haptic_completed') {
         this.completeCommand(event.payload.commandId, event.payload.result, event.timestamp, event.eventId);
       }
+      if (event.type === 'session_ended') this.persistSpeechMetrics(event.sessionId);
     })();
 
     this.logger.info('Boundary event accepted', this.logContext(event));
@@ -277,6 +282,25 @@ export class EventStore {
   getSpeechMetrics(sessionId: string, nowEpochMs = Date.now()): SpeechMetricSnapshot | undefined {
     const session = this.getSession(sessionId);
     return session ? deriveSpeechMetrics(session, this.getTranscriptSegments(sessionId), nowEpochMs) : undefined;
+  }
+
+  getPersistedSpeechMetrics(sessionId: string): SpeechMetricSnapshot | undefined {
+    const row = this.database.prepare('SELECT json FROM speech_metric_snapshots WHERE session_id = ?')
+      .get(sessionId) as JsonRow | undefined;
+    return row ? speechMetricSnapshotSchema.parse(JSON.parse(row.json)) : undefined;
+  }
+
+  getSessionReport(sessionId: string): SessionReport | undefined {
+    const session = this.getSession(sessionId);
+    if (!session) return undefined;
+    const metrics = this.getPersistedSpeechMetrics(sessionId) ?? this.deriveStoredSpeechMetrics(session);
+    return deriveSessionReport({
+      session,
+      vitals: this.getVitalSamples(sessionId),
+      transitions: this.getStressTransitions(sessionId),
+      segments: this.getTranscriptSegments(sessionId),
+      metrics
+    });
   }
 
   getContext(sessionId: string): SessionContext | undefined {
@@ -501,10 +525,46 @@ export class EventStore {
         UNIQUE(session_id, type, idempotency_key)
       );
       CREATE INDEX IF NOT EXISTS interventions_session_idx ON interventions(session_id, type);
+      CREATE TABLE IF NOT EXISTS speech_metric_snapshots (
+        session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+        calculated_at_ms INTEGER NOT NULL,
+        json TEXT NOT NULL
+      );
       INSERT INTO transcript_search (session_id, segment_id, text)
       SELECT session_id, segment_id, json_extract(json, '$.text') FROM transcript_segments
       WHERE segment_id NOT IN (SELECT segment_id FROM transcript_search);
     `);
+    const sessions = this.database.prepare('SELECT json FROM sessions').all() as JsonRow[];
+    for (const { json } of sessions) {
+      const session = sessionSchema.parse(JSON.parse(json));
+      if (!this.getPersistedSpeechMetrics(session.sessionId)) this.persistSpeechMetrics(session.sessionId);
+    }
+  }
+
+  private persistSpeechMetrics(sessionId: string): void {
+    const session = this.getSession(sessionId);
+    if (!session) return;
+    const metrics = this.deriveStoredSpeechMetrics(session);
+    this.database.prepare(`
+      INSERT INTO speech_metric_snapshots (session_id, calculated_at_ms, json) VALUES (?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        calculated_at_ms = excluded.calculated_at_ms,
+        json = excluded.json
+    `).run(sessionId, metrics.calculatedAtMs, JSON.stringify(metrics));
+  }
+
+  private deriveStoredSpeechMetrics(session: Session): SpeechMetricSnapshot {
+    const segments = this.getTranscriptSegments(session.sessionId);
+    const latestEvidenceMs = Math.max(
+      segments.at(-1)?.endMs ?? 0,
+      this.getVitalSamples(session.sessionId).at(-1)?.sessionElapsedMs ?? 0
+    );
+    const referenceEpochMs = session.endedAt
+      ? Date.parse(session.endedAt)
+      : session.startedAt
+        ? Date.parse(session.startedAt) + latestEvidenceMs
+        : 0;
+    return deriveSpeechMetrics(session, segments, referenceEpochMs);
   }
 
   private rebuildStressTimeline(sessionId: string): void {

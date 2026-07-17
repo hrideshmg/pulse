@@ -255,6 +255,15 @@ async function route(
     return;
   }
 
+  const reportMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/report$/);
+  if (request.method === 'GET' && reportMatch) {
+    const sessionId = decodeURIComponent(reportMatch[1]);
+    const report = store.getSessionReport(sessionId);
+    if (!report) throw new Error(`Unknown session: ${sessionId}`);
+    sendJson(response, 200, report);
+    return;
+  }
+
   const transitionMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/status$/);
   if (request.method === 'PATCH' && transitionMatch) {
     const sessionId = decodeURIComponent(transitionMatch[1]);

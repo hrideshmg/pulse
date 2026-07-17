@@ -1,6 +1,6 @@
 # Pulse
 
-Pulse is a NitroStack MCP server plus watch, phone, and backend foundations for exposing consent-scoped physiological and conversational state to agents. Phase 3 exposes live vitals and a deterministic stress signal as consent-scoped MCP Resources. The Phase 0 audio and haptic probes remain available for device validation.
+Pulse is a NitroStack MCP server plus watch, phone, and backend foundations for exposing consent-scoped physiological and conversational state to agents. Phase 5 adds deterministic stored-session reports and an MCP timeline widget that aligns heart rate with transcript evidence. The Phase 0 audio and haptic probes remain available for device validation.
 
 ## Components
 
@@ -23,7 +23,7 @@ The phone and watch modules intentionally share `applicationId` `dev.nitrostack.
 
 Never put the Deepgram key in source control. Copy the safe settings from `.env.example` into your process environment. For Android Studio builds, add local settings to the ignored `android/local.properties`; shell builds may use environment variables. The Phase 0 probe embeds a Deepgram value in a local debug APK only, so never use a production credential there.
 
-## Run Phase 3
+## Run Phase 5
 
 Install and verify the TypeScript components:
 
@@ -42,11 +42,13 @@ npm run dev
 
 The backend binds to `0.0.0.0:8787` by default. Check `http://127.0.0.1:8787/health` locally. The phone connects to `WS /v1/session-stream`; the existing fixture path remains available through:
 
+Copy `.env.example` to `.env` and set `BACKEND_PORT` and `BACKEND_URL` there. The backend startup scripts load `.env` automatically.
+
 ```text
 npm run mock:events
 ```
 
-Sessions persist at `DATABASE_PATH=data/pulse.sqlite` by default. MCP agents can read `session://current/transcript`, `session://latest/transcript`, `session://current/speech-metrics`, `session://current/vitals`, and `session://current/stress`. They can also call the read-only `search_sessions` tool to find stored sessions by transcript keywords, date, or status, then read `session://{sessionId}/transcript`.
+Sessions persist at `DATABASE_PATH=data/pulse.sqlite` by default. MCP agents can read `session://current/transcript`, `session://latest/transcript`, `session://current/speech-metrics`, `session://current/vitals`, and `session://current/stress`. They can call `search_sessions`, read `session://{sessionId}/report`, or call `generate_session_report` to render the synchronized report widget in a supporting MCP client.
 
 `session://current/vitals` returns the latest BPM, availability, source, freshness, and a rolling window capped at 30 samples. `session://current/stress` returns the backend-derived stress state, baseline, delta, elevation duration, and cooldown. Both resources require a current calibrating or active session and an active `read:vitals` consent grant; authenticated callers must also carry `read:vitals`, and session-bound callers must match the current session.
 

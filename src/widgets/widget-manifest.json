@@ -23,6 +23,13 @@
         }
       ],
       "tags": ["pulse", "health", "devices", "connectivity"]
+    },
+    {
+      "uri": "/session-report",
+      "name": "Session timeline",
+      "description": "Scrub heart rate and transcript evidence on one synchronized timeline.",
+      "examples": [],
+      "tags": ["session", "vitals", "transcript"]
     }
   ],
   "generatedAt": "2026-07-17T00:00:00.000Z"
