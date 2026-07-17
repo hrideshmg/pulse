@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import WebSocket from 'ws';
 import type { RuntimeConfig } from '../config.js';
 import { mockEventSequence } from '../contracts/fixtures.js';
+import { StructuredLogger } from '../observability/logger.js';
+import { EventStore } from './event-store.js';
 import { createBackend } from './server.js';
 
 const config: RuntimeConfig = {
@@ -12,6 +17,7 @@ const config: RuntimeConfig = {
   BACKEND_HOST: '127.0.0.1',
   BACKEND_PORT: 0,
   BACKEND_URL: 'http://127.0.0.1:0',
+  DATABASE_PATH: ':memory:',
   VITALS_SOURCE: 'simulated',
   AUDIO_INPUT: 'phone',
   TRANSCRIPTION_MODE: 'fixture',
@@ -56,7 +62,7 @@ describe('Phase 2 backend', () => {
 
     const response = await fetch(`${baseUrl}/v1/sessions/${mockEventSequence[0].sessionId}/events`);
     const body = await response.json() as { events: unknown[] };
-    assert.equal(body.events.length, 3);
+    assert.equal(body.events.length, mockEventSequence.length);
   });
 
   it('suppresses duplicate event IDs', async () => {
@@ -115,6 +121,16 @@ describe('Phase 2 backend', () => {
     };
     assert.equal(body.session.sessionId, sessionId);
     assert.deepEqual(body.segments.map(({ segmentId }) => segmentId), ['segment-earlier', 'segment-later']);
+
+    const metricsResponse = await fetch(`${baseUrl}/v1/sessions/current/speech-metrics`);
+    assert.equal(metricsResponse.status, 200);
+    const metricsBody = await metricsResponse.json() as {
+      session: { sessionId: string };
+      metrics: { wordsPerMinute: number; longestTurnMs: number };
+    };
+    assert.equal(metricsBody.session.sessionId, sessionId);
+    assert.equal(metricsBody.metrics.wordsPerMinute > 0, true);
+    assert.equal(metricsBody.metrics.longestTurnMs, 2_000);
   });
 
   it('acknowledges streamed events and stores vitals in timeline order', async () => {
@@ -174,5 +190,159 @@ describe('Phase 2 backend', () => {
     const body = await response.json() as { samples: Array<{ bpm: number }>; latest: { bpm: number } };
     assert.deepEqual(body.samples.map((sample) => sample.bpm), [80, 91]);
     assert.equal(body.latest.bpm, 91);
+  });
+
+  it('exposes consent-scoped current vitals and deterministic stress transitions', async () => {
+    const sessionId = 'session-phase-three-001';
+    const startedAt = '2026-07-17T12:00:00.000Z';
+    const start = {
+      ...mockEventSequence[0],
+      sessionId,
+      eventId: 'event-phase-three-session',
+      timestamp: startedAt,
+      payload: { session: { ...mockEventSequence[0].payload.session, sessionId, status: 'active', startedAt } }
+    };
+    const makeVital = (at: number, bpm: number) => ({
+      ...mockEventSequence[1],
+      sessionId,
+      eventId: `event-phase-three-vital-${at}`,
+      timestamp: new Date(Date.parse(startedAt) + at).toISOString(),
+      payload: {
+        ...mockEventSequence[1].payload,
+        sessionId,
+        bpm,
+        sessionElapsedMs: at,
+        deviceTimestamp: new Date(Date.parse(startedAt) + at).toISOString()
+      }
+    });
+    const baseline = [0, 1_000, 2_000, 3_000, 4_000, 5_000].map((at) => makeVital(at, 70));
+    for (const event of [start, ...baseline]) {
+      const response = await fetch(`${baseUrl}/v1/events`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event)
+      });
+      assert.equal(response.status, 202);
+    }
+
+    const denied = await fetch(`${baseUrl}/v1/sessions/current/vitals`);
+    assert.equal((await denied.json() as { consentAllowed: boolean }).consentAllowed, false);
+
+    const grant = {
+      version: '1.0',
+      type: 'consent_updated',
+      sessionId,
+      eventId: 'event-phase-three-consent',
+      timestamp: startedAt,
+      correlationId: 'correlation-phase-three',
+      payload: {
+        grantId: 'grant-phase-three-vitals', sessionId, scope: 'read:vitals', grantedAt: startedAt, revokedAt: null
+      }
+    };
+    const elevated = [6_000, 7_000, 8_000, 9_000, 10_000, 11_000].map((at) => makeVital(at, 85));
+    for (const event of [grant, ...elevated].reverse()) {
+      const response = await fetch(`${baseUrl}/v1/events`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event)
+      });
+      assert.equal(response.status, 202);
+    }
+
+    const vitalsResponse = await fetch(`${baseUrl}/v1/sessions/current/vitals`);
+    const vitals = await vitalsResponse.json() as { consentAllowed: boolean; latest: { bpm: number }; window: unknown[] };
+    assert.equal(vitals.consentAllowed, true);
+    assert.equal(vitals.latest.bpm, 85);
+    assert.equal(vitals.window.length, 12);
+
+    const stressResponse = await fetch(`${baseUrl}/v1/sessions/current/stress`);
+    const stress = await stressResponse.json() as { signal: { state: string; baselineBpm: number } };
+    assert.equal(stress.signal.state, 'sustained_elevation');
+    assert.equal(stress.signal.baselineBpm, 70);
+
+    const transitionsResponse = await fetch(`${baseUrl}/v1/sessions/${sessionId}/stress-events`);
+    const transitions = await transitionsResponse.json() as { transitions: Array<{ state: string }> };
+    assert.equal(transitions.transitions.filter(({ state }) => state === 'sustained_elevation').length, 1);
+  });
+
+  it('finds completed sessions by indexed transcript and exposes their history', async () => {
+    const sessionId = 'session-transcript-search-001';
+    const events = [
+      {
+        ...mockEventSequence[0],
+        sessionId,
+        eventId: 'event-context-session',
+        payload: { session: { ...mockEventSequence[0].payload.session, sessionId } }
+      },
+      {
+        ...mockEventSequence[2],
+        sessionId,
+        eventId: 'event-search-transcript',
+        payload: {
+          ...mockEventSequence[2].payload,
+          sessionId,
+          segmentId: 'segment-transcript-search',
+          text: 'We discussed Acme annual pricing and contract terms.'
+        }
+      },
+      {
+        version: '1.0',
+        type: 'session_ended',
+        sessionId,
+        eventId: 'event-search-ended',
+        timestamp: '2026-07-17T10:10:00.000Z',
+        correlationId: 'correlation-transcript-search',
+        payload: { endedAt: '2026-07-17T10:10:00.000Z', reason: 'completed' }
+      }
+    ];
+    for (const event of events) {
+      const response = await fetch(`${baseUrl}/v1/events`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(event)
+      });
+      assert.equal(response.status, 202);
+    }
+
+    const searchResponse = await fetch(`${baseUrl}/v1/sessions/search`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: 'Acme pricing', status: 'completed' })
+    });
+    assert.equal(searchResponse.status, 200);
+    const search = await searchResponse.json() as { results: Array<{ session: { sessionId: string } }> };
+    assert.deepEqual(search.results.map(({ session }) => session.sessionId), [sessionId]);
+
+    const transcriptResponse = await fetch(`${baseUrl}/v1/sessions/${sessionId}/transcript`);
+    const transcript = await transcriptResponse.json() as { segments: Array<{ segmentId: string }> };
+    assert.deepEqual(transcript.segments.map(({ segmentId }) => segmentId), ['segment-transcript-search']);
+
+    const latestResponse = await fetch(`${baseUrl}/v1/transcripts/latest`);
+    const latest = await latestResponse.json() as {
+      session: { sessionId: string };
+      segment: { segmentId: string };
+    };
+    assert.equal(latest.session.sessionId, sessionId);
+    assert.equal(latest.segment.segmentId, 'segment-transcript-search');
+  });
+});
+
+describe('SQLite persistence', () => {
+  it('retains sessions, transcripts, and duplicate IDs across restarts', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pulse-store-'));
+    const databasePath = join(directory, 'pulse.sqlite');
+    const logger = new StructuredLogger('test', 'error');
+    try {
+      const firstStore = new EventStore(logger, databasePath);
+      for (const event of mockEventSequence) firstStore.ingest(event);
+      firstStore.close();
+
+      const reopenedStore = new EventStore(logger, databasePath);
+      assert.equal(reopenedStore.getSession(mockEventSequence[0].sessionId)?.sessionId, mockEventSequence[0].sessionId);
+      assert.deepEqual(
+        reopenedStore.getTranscriptSegments(mockEventSequence[0].sessionId).map(({ segmentId }) => segmentId),
+        ['segment-fixture-001']
+      );
+      assert.equal(reopenedStore.ingest(mockEventSequence[2]).duplicate, true);
+      reopenedStore.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

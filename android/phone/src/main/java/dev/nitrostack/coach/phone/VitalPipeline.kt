@@ -33,6 +33,14 @@ private const val ACK_TIMEOUT_MS = 10_000L
 fun isReadingStale(receivedAtEpochMs: Long?, nowEpochMs: Long = System.currentTimeMillis()): Boolean =
     receivedAtEpochMs == null || nowEpochMs - receivedAtEpochMs > STALE_AFTER_MS
 
+fun shouldApplyVitalUpdate(
+    elapsedMs: Long,
+    timestamp: String,
+    latestElapsedMs: Long?,
+    latestTimestamp: String?
+): Boolean = latestElapsedMs == null || elapsedMs > latestElapsedMs ||
+    (elapsedMs == latestElapsedMs && (latestTimestamp == null || timestamp >= latestTimestamp))
+
 data class PhoneVitalsState(
     val sessionId: String? = null,
     val sessionStatus: String = "created",
@@ -40,6 +48,7 @@ data class PhoneVitalsState(
     val latestBpm: Double? = null,
     val availability: String = "unknown",
     val latestSessionElapsedMs: Long? = null,
+    val latestWatchEventTimestamp: String? = null,
     val latestReceivedAtEpochMs: Long? = null,
     val watchConnected: Boolean = false,
     val backendConnected: Boolean = false,
@@ -98,12 +107,24 @@ class VitalPipeline(private val context: Context) {
                 sessionId = sessionId,
                 sessionStatus = "calibrating",
                 latestBpm = null,
+                latestSessionElapsedMs = null,
+                latestWatchEventTimestamp = null,
                 latestReceivedAtEpochMs = null,
                 availability = "acquiring",
                 message = "Session started"
             )
         }
         enqueue(event)
+        enqueue(PulseContract.envelope(
+            type = "consent_updated",
+            sessionId = sessionId,
+            payload = JSONObject()
+                .put("grantId", vitalsGrantId(sessionId))
+                .put("sessionId", sessionId)
+                .put("scope", "read:vitals")
+                .put("grantedAt", now)
+                .put("revokedAt", JSONObject.NULL)
+        ))
         publishSessionState("calibrating")
     }
 
@@ -113,12 +134,30 @@ class VitalPipeline(private val context: Context) {
         stopSimulator()
         val endedAt = Instant.now().toString()
         enqueue(PulseContract.envelope(
+            type = "consent_updated",
+            sessionId = sessionId,
+            payload = JSONObject()
+                .put("grantId", vitalsGrantId(sessionId))
+                .put("sessionId", sessionId)
+                .put("scope", "read:vitals")
+                .put("grantedAt", Instant.ofEpochMilli(prefs.getLong("session_start_wall", System.currentTimeMillis())).toString())
+                .put("revokedAt", endedAt)
+        ))
+        enqueue(PulseContract.envelope(
             type = "session_ended",
             sessionId = sessionId,
             payload = JSONObject().put("endedAt", endedAt).put("reason", "completed")
         ))
         prefs.edit().putString("session_status", "completed").apply()
-        updateState { copy(sessionStatus = "completed", message = "Session ending; queued events will finish uploading") }
+        updateState {
+            copy(
+                sessionStatus = "completed",
+                latestBpm = null,
+                latestReceivedAtEpochMs = null,
+                availability = "inactive",
+                message = "Session ending; queued events will finish uploading"
+            )
+        }
         publishSessionState("completed")
     }
 
@@ -175,8 +214,27 @@ class VitalPipeline(private val context: Context) {
                 acceptVitalEvent(backendEvent)
             }
             "heart_rate_availability" -> {
-                val availability = event.getJSONObject("payload").getString("availability")
-                updateState { copy(availability = availability, message = "Watch sensor $availability") }
+                val payload = event.getJSONObject("payload")
+                val availability = payload.getString("availability")
+                val elapsedMs = payload.getLong("sessionElapsedMs")
+                val timestamp = event.getString("timestamp")
+                if (shouldApplyVitalUpdate(
+                        elapsedMs,
+                        timestamp,
+                        mutableState.value.latestSessionElapsedMs,
+                        mutableState.value.latestWatchEventTimestamp
+                    )) {
+                    updateState {
+                        copy(
+                            latestBpm = if (availability == "available") latestBpm else null,
+                            latestReceivedAtEpochMs = if (availability == "available") latestReceivedAtEpochMs else null,
+                            latestSessionElapsedMs = elapsedMs,
+                            latestWatchEventTimestamp = timestamp,
+                            availability = availability,
+                            message = "Watch sensor $availability"
+                        )
+                    }
+                }
             }
             else -> return false
         }
@@ -226,15 +284,25 @@ class VitalPipeline(private val context: Context) {
 
     private fun acceptVitalEvent(event: JSONObject) {
         val payload = event.getJSONObject("payload")
-        updateState {
-            copy(
-                latestBpm = payload.getDouble("bpm"),
-                availability = payload.getString("availability"),
-                source = payload.getString("source"),
-                latestSessionElapsedMs = payload.getLong("sessionElapsedMs"),
-                latestReceivedAtEpochMs = System.currentTimeMillis(),
-                message = if (payload.getString("source") == "simulator") "SIMULATED vital received" else "Live watch vital received"
-            )
+        val elapsedMs = payload.getLong("sessionElapsedMs")
+        val timestamp = event.getString("timestamp")
+        if (shouldApplyVitalUpdate(
+                elapsedMs,
+                timestamp,
+                mutableState.value.latestSessionElapsedMs,
+                mutableState.value.latestWatchEventTimestamp
+            )) {
+            updateState {
+                copy(
+                    latestBpm = payload.getDouble("bpm"),
+                    availability = payload.getString("availability"),
+                    source = payload.getString("source"),
+                    latestSessionElapsedMs = elapsedMs,
+                    latestWatchEventTimestamp = timestamp,
+                    latestReceivedAtEpochMs = System.currentTimeMillis(),
+                    message = if (payload.getString("source") == "simulator") "SIMULATED vital received" else "Live watch vital received"
+                )
+            }
         }
         enqueue(event)
     }
@@ -428,6 +496,8 @@ class VitalPipeline(private val context: Context) {
 
     private fun sessionElapsedMs() =
         (SystemClock.elapsedRealtime() - sessionStartElapsedRealtimeMs).coerceAtLeast(0)
+
+    private fun vitalsGrantId(sessionId: String) = "$sessionId-read-vitals"
 
     private inline fun updateState(update: PhoneVitalsState.() -> PhoneVitalsState) {
         mutableState.value = mutableState.value.update()

@@ -84,7 +84,6 @@ export const speechMetricSnapshotSchema = z.object({
   sessionId: id,
   calculatedAtMs: z.number().int().nonnegative(),
   wordsPerMinute: z.number().nonnegative(),
-  fillersPerMinute: z.number().nonnegative(),
   longestTurnMs: z.number().int().nonnegative(),
   currentSilenceMs: z.number().int().nonnegative()
 }).strict();
@@ -97,6 +96,7 @@ export const consentScopeSchema = z.enum([
   'act:haptic',
   'act:audio'
 ]);
+export type ConsentScope = z.infer<typeof consentScopeSchema>;
 
 export const consentGrantSchema = z.object({
   grantId: id,

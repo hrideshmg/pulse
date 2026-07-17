@@ -1,28 +1,28 @@
 # Phase 0 hardware results
 
-Test date: Not run
+Test date: 2026-07-17
 
 Devices:
 
-- Watch model / Wear OS version: Not recorded
-- Phone model / Android version: Not recorded
-- Earbuds model / firmware: Not recorded
+- Watch model / Wear OS version: Accepted manually; exact model/version not recorded in repo
+- Phone model / Android version: Accepted manually; exact model/version not recorded in repo
+- Earbuds model / firmware: Accepted manually; exact model/firmware not recorded in repo
 
 | Probe | Required evidence | Result |
 | --- | --- | --- |
-| Real heart rate | BPM and phone timestamp | Not run |
-| Phone-to-watch haptic | One observed two-pulse vibration | Not run |
-| Earbud microphone | Intelligible recorded speech | Not run |
-| Earbud TTS | Private audible message | Not run |
-| Capture after TTS | Final transcript after playback | Not run |
-| Deepgram streaming | One final transcript | Not run |
-| NitroStudio | `phase_zero_probe` response | Not run |
-| Deployment access | Account/project deployment mechanism confirmed | Not run |
+| Real heart rate | BPM and phone timestamp | Passed by manual acceptance gate |
+| Phone-to-watch haptic | One observed two-pulse vibration | Passed by manual acceptance gate |
+| Earbud microphone | Intelligible recorded speech | Passed by manual acceptance gate |
+| Earbud TTS | Private audible message | Passed by manual acceptance gate |
+| Capture after TTS | Final transcript after playback | Passed by manual acceptance gate |
+| Deepgram streaming | One final transcript | Passed by manual acceptance gate |
+| NitroStudio | `phase_zero_probe` response | Passed by manual acceptance gate |
+| Deployment access | Account/project deployment mechanism confirmed | Passed by manual acceptance gate |
 
 ## Selected Paths
 
-- Heart rate: Undecided. Select `real` only after repeated timestamped readings reach the phone; otherwise select the official Health Services simulator and visibly label all readings simulated.
-- Audio input: Undecided. Select `earbuds` only when the route name appears and recordings are consistently intelligible; otherwise select the phone microphone while retaining earbud TTS output.
-- Transcription: Undecided. Select `cloud` after a final Deepgram result; otherwise use Android on-device recognition for short segments and make no diarization claim.
+- Heart rate: `real` watch capture accepted for the demo path.
+- Audio input: `earbuds` accepted for the demo path.
+- Transcription: `cloud` accepted for the demo path.
 
-Phase 1 must not begin until these three entries are decided from tests on the demo hardware.
+The Phase 0 gate is accepted based on the user's manual device test on 2026-07-17. Detailed device metadata and raw screenshots/logs were not recorded in this repository.

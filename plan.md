@@ -19,7 +19,7 @@ The flagship demonstration is a **real-time co-regulation loop**:
 Build in this order. Each feature should reach its acceptance gate before the next becomes the focus.
 
 1. **Vitals as a Resource** — live heart rate plus a derived stress signal (sustained-elevation detection). This is the core and most important feature; the agent reads *state*, not just raw numbers.
-2. **Context + transcript as Resources** — pre-loaded session context (who the wearer is, what the situation is), a rolling transcript, and speech metrics (pace, filler words).
+2. **Context + transcript as Resources** — pre-loaded session context (who the wearer is, what the situation is), a rolling transcript, and speech metrics such as pace.
 3. **HR-synced session report** — transcript and heart-rate trace aligned on a single scrubber; click a spike and see/hear the exact moment that caused it, with per-session and cross-session trends.
 4. **Consent-gated Tools** — `haptic_nudge` and `whisper_coach`, each scoped to exactly what the wearer approved.
 5. **Audit log** — every Resource read and Tool call timestamped, recorded, and queryable after the fact.
@@ -284,7 +284,7 @@ Give the agent the *why* behind the numbers, so decisions are contextual rather 
 - Stream audio to Deepgram through the backend or short-lived provider credentials; display interim captions on the phone; persist only final segments.
 - Capture speaker labels when diarization supports it; normalize timestamps to session-relative time.
 - Handle provider disconnects and stream restarts without resetting the session timeline; on-device fallback for short segments.
-- Compute speech metrics from final wearer segments: words per minute, fillers per minute, long turns, silence.
+- Compute speech metrics from final wearer segments: words per minute, long turns, silence.
 - Implement MCP resources:
   - `session://current/context`
   - `session://current/transcript` — rolling window of final segments (parameterized reads via a `get_transcript_window` read-only tool if needed)
@@ -295,7 +295,7 @@ Give the agent the *why* behind the numbers, so decisions are contextual rather 
 ### Acceptance gate
 
 - A scripted two-speaker conversation produces ordered final segments readable through MCP within seconds of being spoken.
-- Fixed transcript fixtures always produce the same filler and pace metrics.
+- Fixed transcript fixtures always produce the same pace metrics.
 - An agent reading context + transcript + stress can explain *why* the wearer might be stressed (e.g. "heart rate rose as the pricing objection was raised").
 - Provider failure activates a visible fallback state; reconnection does not duplicate segments.
 - Ten minutes of capture does not leak resources or lose the audio route under normal conditions.
@@ -308,7 +308,7 @@ Build the report from stored evidence. The model may summarize; it may not manuf
 
 - Persist the full session timeline: vital samples, stress-signal transitions, transcript segments, metrics, and (once Phase 6 exists) interventions.
 - Align the transcript and heart-rate trace on a single scrubber in the phone UI: click a spike and see — and where audio consent allows, hear — the exact transcript moment that caused it.
-- Chronological timeline generation from stored data; per-session summaries (pace, fillers, stress episodes, recovery times).
+- Chronological timeline generation from stored data; per-session summaries (pace, stress episodes, recovery times).
 - Cross-session trends once more than one session exists (baseline drift, stress-episode frequency, recovery speed).
 - Expose `session://{sessionId}/report` as an MCP resource.
 - Session deletion and retention controls; deleting a session removes transcript, vitals, metrics, and interventions.

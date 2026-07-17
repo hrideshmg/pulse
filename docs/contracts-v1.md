@@ -57,8 +57,28 @@ android\gradlew.bat :contracts:testDebugUnitTest
 - `GET /health`: backend, transcription-provider, command-channel, and runtime-mode health
 - `POST /v1/events`: strict v1 event ingestion and duplicate acknowledgement
 - `WS /v1/session-stream`: persistent event ingestion and per-event acknowledgement
-- `GET /v1/sessions/{sessionId}/events`: current in-memory mock timeline
+- `GET /v1/sessions/current/vitals`: current-session latest vital, freshness, and capped rolling window
+- `GET /v1/sessions/current/stress`: current-session deterministic stress signal
+- `GET /v1/sessions/{sessionId}/events`: persisted event timeline
 - `GET /v1/sessions/{sessionId}/vitals`: ordered vital samples and latest sample
+- `GET /v1/sessions/{sessionId}/stress-events`: deterministic stress-state transition timeline
+- `GET /v1/sessions/{sessionId}/transcript`: ordered final transcript segments
+- `GET /v1/transcripts/latest`: most recently ingested final transcript segment
+- `GET /v1/sessions/current/speech-metrics`: pace, turn length, and current silence
+- `POST /v1/sessions/search`: transcript FTS5 search with date and status filters
 - `PATCH /v1/sessions/{sessionId}/status`: lifecycle transition validation
 
-Backend storage remains in memory. Restarting it clears sessions and duplicate IDs; backend process restart recovery is deferred to hardening. Phase 2 replay covers transport disconnects while the backend process and session store remain alive.
+Backend storage uses SQLite at `DATABASE_PATH` (`data/pulse.sqlite` by default). Event acknowledgement follows the committing transaction, and event IDs remain deduplicated across backend restarts. Final transcript text is indexed with SQLite FTS5; raw audio is never stored.
+
+## MCP resources
+
+- `session://current/transcript`: latest final transcript segments for the current session
+- `session://current/vitals`: consent-scoped latest BPM, availability, source, freshness, and rolling window
+- `session://current/stress`: consent-scoped backend-derived stress state with baseline, delta, duration, and cooldown
+- `session://{sessionId}/transcript`: stored transcript for a selected session
+
+Vitals and stress resources require an active `read:vitals` grant for the current session. Authenticated callers must include the `read:vitals` scope; if their auth claims include a `sessionId`, it must match the current session. Every MCP vitals-resource read logs the resource boundary, correlation ID, session ID, consent scope, and authorization result.
+
+## Stress signal
+
+The backend derives stress deterministically from ordered available heart-rate samples. It calibrates a baseline from the first five seconds of available samples, enters `elevated` once BPM is above baseline plus the configured offset, emits `sustained_elevation` only after the elevation duration threshold, enters `recovering` below the recovery threshold, and returns to `baseline` after a continuous recovery duration. A cooldown suppresses immediate retriggering after recovery. Fixed fixtures must produce identical stress output regardless of input order.

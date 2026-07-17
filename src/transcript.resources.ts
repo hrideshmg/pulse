@@ -8,11 +8,41 @@ const currentTranscriptSchema = z.object({
   segments: z.array(transcriptSegmentSchema)
 }).strict();
 
+const historicalTranscriptSchema = z.object({
+  session: sessionSchema,
+  segments: z.array(transcriptSegmentSchema)
+}).strict();
+
+const latestTranscriptSchema = z.union([
+  z.object({ session: sessionSchema, segment: transcriptSegmentSchema }).strict(),
+  z.object({ session: z.null(), segment: z.null() }).strict()
+]);
+
 export class TranscriptResources {
   @Resource({
+    uri: 'session://latest/transcript',
+    name: 'Latest uploaded transcript',
+    description: 'The most recently ingested final transcript segment across all sessions.',
+    mimeType: 'application/json',
+    annotations: { audience: ['assistant'], priority: 1 }
+  })
+  async latestTranscript(uri: string, context: ExecutionContext) {
+    context.logger.info('Latest transcript resource read', {
+      boundary: 'mcp_resource_read',
+      correlationId: crypto.randomUUID(),
+      resourceUri: uri
+    });
+    const response = await fetch(`${loadRuntimeConfig().BACKEND_URL}/v1/transcripts/latest`, {
+      signal: AbortSignal.timeout(2_000)
+    });
+    if (!response.ok) throw new Error(`Backend latest transcript request failed (${response.status})`);
+    return latestTranscriptSchema.parse(await response.json());
+  }
+
+  @Resource({
     uri: 'session://current/transcript',
-    name: 'Current session transcript',
-    description: 'Final transcript segments from the active session, ordered on its monotonic timeline.',
+    name: 'Live Session transcript',
+    description: 'Transcript segments from the active session, ordered on its monotonic timeline.',
     mimeType: 'application/json',
     annotations: { audience: ['assistant'], priority: 1 }
   })
@@ -29,8 +59,34 @@ export class TranscriptResources {
     });
     if (!response.ok) throw new Error(`Backend transcript request failed (${response.status})`);
     const transcript = currentTranscriptSchema.parse(await response.json());
-    return {
-      contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(transcript, null, 2) }]
-    };
+    return transcript;
   }
+
+  @Resource({
+    uri: 'session://{sessionId}/transcript',
+    name: 'Historical Session Transcripts',
+    description: 'All final transcript segments stored for a selected session.',
+    mimeType: 'application/json',
+    annotations: { audience: ['assistant'], priority: 0.9 }
+  })
+  async historicalTranscript(uri: string, context: ExecutionContext) {
+    const sessionId = sessionIdFromResourceUri(uri, 'transcript');
+    context.logger.info('Historical transcript resource read', {
+      boundary: 'mcp_resource_read',
+      correlationId: crypto.randomUUID(),
+      resourceUri: uri,
+      sessionId
+    });
+    const response = await fetch(`${loadRuntimeConfig().BACKEND_URL}/v1/sessions/${encodeURIComponent(sessionId)}/transcript`, {
+      signal: AbortSignal.timeout(2_000)
+    });
+    if (!response.ok) throw new Error(`Backend transcript request failed (${response.status})`);
+    return historicalTranscriptSchema.parse(await response.json());
+  }
+}
+
+function sessionIdFromResourceUri(uri: string, subject: string): string {
+  const match = uri.match(new RegExp(`^session://([^/]+)/${subject}$`));
+  if (!match) throw new Error(`Invalid session resource URI: ${uri}`);
+  return decodeURIComponent(match[1]);
 }
