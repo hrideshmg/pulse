@@ -42,6 +42,8 @@ npm run dev
 
 The backend binds to `0.0.0.0:8787` by default. Check `http://127.0.0.1:8787/health` locally. The phone connects to `WS /v1/session-stream`; the existing fixture path remains available through:
 
+Copy `.env.example` to `.env` and set `BACKEND_PORT` and `BACKEND_URL` there. The backend startup scripts load `.env` automatically.
+
 ```text
 npm run mock:events
 ```
