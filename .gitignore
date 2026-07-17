@@ -46,3 +46,4 @@ upskill/*.md
 .agents/**/*.log
 .agents/usage/
 playwright-cli
+.nitrostudio/
