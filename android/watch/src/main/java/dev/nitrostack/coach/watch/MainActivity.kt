@@ -49,6 +49,13 @@ class MainActivity : ComponentActivity() {
     private fun VitalsScreen() {
         val reading by WatchStateStore.heartRate.collectAsStateWithLifecycle()
         val bridge by WatchStateStore.state.collectAsStateWithLifecycle()
+        val copilotDisabledReason = when {
+            !bridge.phoneConnected -> "Copilot unavailable: connect the phone"
+            !bridge.backendConnected -> "Copilot unavailable: connect the backend"
+            bridge.sessionStatus != "active" -> "Copilot unavailable: start a session"
+            bridge.copilotState in setOf("requested", "thinking", "queued", "playing") -> "Copilot request in progress"
+            else -> null
+        }
         var permitted by remember {
             mutableStateOf(ContextCompat.checkSelfPermission(this, Manifest.permission.BODY_SENSORS) == PackageManager.PERMISSION_GRANTED)
         }
@@ -109,9 +116,9 @@ class MainActivity : ComponentActivity() {
             if (BuildConfig.COPILOT_ENABLED) {
                 Button(
                     onClick = ::requestAdvice,
-                    enabled = bridge.phoneConnected && bridge.sessionStatus == "active" &&
-                        bridge.copilotState !in setOf("requested", "thinking", "queued", "playing")
+                    enabled = copilotDisabledReason == null
                 ) { Text("Ask copilot") }
+                copilotDisabledReason?.let { Text(it) }
             }
         }
     }

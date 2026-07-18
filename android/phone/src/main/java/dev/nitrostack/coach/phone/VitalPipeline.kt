@@ -513,7 +513,10 @@ class VitalPipeline(
                 acknowledgementTimeoutJob?.cancel()
                 if (!acknowledgement.optBoolean("accepted")) {
                     val rejected = pending.firstOrNull { it.getString("eventId") == eventId }
-                    if (rejected != null) rememberRejectedEvent(rejected, acknowledgement.optString("error"))
+                    if (rejected != null) {
+                        rememberRejectedEvent(rejected, acknowledgement.optString("error"))
+                        if (rejected.getString("type") == "advice_requested") updateCopilotState("failed", rejected)
+                    }
                     pending.removeAll { it.getString("eventId") == eventId }
                     inFlightEventId = null
                     savePending()
