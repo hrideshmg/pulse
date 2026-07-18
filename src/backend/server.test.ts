@@ -24,6 +24,9 @@ const config: RuntimeConfig = {
   DEVICE_ACTIONS: 'simulated',
   COPILOT_ENABLED: false,
   COPILOT_MODE: 'automatic',
+  OPENAI_API_KEY: undefined,
+  OPENAI_MODEL: 'gpt-4.1-mini',
+  OPENAI_BASE_URL: 'https://api.openai.com/v1',
   STORE_RAW_AUDIO: false,
   DEEPGRAM_API_KEY: undefined
 };
@@ -642,7 +645,13 @@ describe('Phase 8 conversation copilot', () => {
 });
 
 describe('Automatic conversation copilot', () => {
-  const automaticBackend = createBackend({ ...config, COPILOT_ENABLED: true, COPILOT_MODE: 'automatic' });
+  const automaticBackend = createBackend({
+    ...config,
+    COPILOT_ENABLED: true,
+    COPILOT_MODE: 'automatic',
+    OPENAI_API_KEY: 'test-openai-key',
+    OPENAI_BASE_URL: 'https://openai.test/v1'
+  });
   let baseUrl = '';
 
   before(async () => {
@@ -656,7 +665,22 @@ describe('Automatic conversation copilot', () => {
     await new Promise<void>((resolve, reject) => automaticBackend.server.close((error) => error ? reject(error) : resolve()));
   });
 
-  it('turns a watch request into goal-based advice without an MCP claim', async () => {
+  it('turns a watch request into OpenAI advice without an MCP claim', async () => {
+    const originalFetch = globalThis.fetch;
+    let openAiCalled = false;
+    globalThis.fetch = (async (input, init) => {
+      if (String(input) !== 'https://openai.test/v1/responses') return originalFetch(input, init);
+      openAiCalled = true;
+      assert.equal((init?.headers as Record<string, string>).authorization, 'Bearer test-openai-key');
+      const request = JSON.parse(String(init?.body)) as { model: string; store: boolean; input: string };
+      assert.equal(request.model, 'gpt-4.1-mini');
+      assert.equal(request.store, false);
+      assert.match(request.input, /Explain the implementation timeline/);
+      return new Response(JSON.stringify({
+        output: [{ content: [{ type: 'output_text', text: '{"advice":"Connect the timeline to the project outcome next."}' }] }]
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+
     const sessionId = 'automatic-copilot-session';
     const startedAt = new Date(Date.now() - 5_000).toISOString();
     const events = [
@@ -680,11 +704,11 @@ describe('Automatic conversation copilot', () => {
           stressSensitivity: { baselineOffsetBpm: 12, elevationTriggerMs: 5_000, recoveryTriggerMs: 3_000, cooldownMs: 10_000 }
         }
       },
-      {
-        version: '1.0', type: 'consent_updated', sessionId, eventId: 'automatic-audio-consent',
-        timestamp: startedAt, correlationId: 'automatic-consent-correlation',
-        payload: { grantId: 'automatic-audio-consent', sessionId, scope: 'act:audio', grantedAt: startedAt, revokedAt: null }
-      },
+      ...['read:context', 'read:transcript', 'act:audio'].map((scope) => ({
+        version: '1.0', type: 'consent_updated', sessionId, eventId: `automatic-consent-${scope}`,
+        timestamp: startedAt, correlationId: `automatic-consent-correlation-${scope}`,
+        payload: { grantId: `automatic-consent-${scope}`, sessionId, scope, grantedAt: startedAt, revokedAt: null }
+      })),
       {
         version: '1.0', type: 'advice_requested', sessionId, eventId: 'automatic-request-event',
         timestamp: new Date().toISOString(), correlationId: 'automatic-request-correlation',
@@ -692,16 +716,24 @@ describe('Automatic conversation copilot', () => {
       }
     ];
 
-    for (const event of events) {
-      const response = await fetch(`${baseUrl}/v1/events`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event)
-      });
-      assert.equal(response.status, 202);
-    }
+    try {
+      for (const event of events) {
+        const response = await fetch(`${baseUrl}/v1/events`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event)
+        });
+        assert.equal(response.status, 202);
+      }
 
+      for (let attempt = 0; attempt < 20 && automaticBackend.store.getCopilotRequest('automatic-request')?.state !== 'completed'; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
     const request = automaticBackend.store.getCopilotRequest('automatic-request');
+    assert.equal(openAiCalled, true);
     assert.equal(request?.state, 'completed');
-    assert.equal(request?.advice, 'Next, mention Explain the implementation timeline');
+    assert.equal(request?.advice, 'Connect the timeline to the project outcome next.');
     assert.equal(automaticBackend.store.getInterventions(sessionId).length, 1);
     const pending = await (await fetch(`${baseUrl}/v1/copilot/requests/pending`)).json() as { request: unknown };
     assert.equal(pending.request, null);

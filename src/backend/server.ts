@@ -28,7 +28,7 @@ export interface Backend {
 export function createBackend(config: RuntimeConfig = loadRuntimeConfig()): Backend {
   const logger = new StructuredLogger('backend', config.LOG_LEVEL);
   const store = new EventStore(logger, config.DATABASE_PATH);
-  const deviceActions = new DeviceActions(store, config);
+  const deviceActions = new DeviceActions(store, config, logger);
   const websocketServer = new WebSocketServer({ noServer: true });
   const server = createServer(async (request, response) => {
     try {

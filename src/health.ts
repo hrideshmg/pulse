@@ -33,7 +33,14 @@ export function localHealth(component: string, config: RuntimeConfig): HealthRes
   const device = config.DEVICE_ACTIONS === 'simulated'
     ? { name: 'device_command_channel', status: 'available' as const, detail: 'simulated actions selected' }
     : { name: 'device_command_channel', status: 'degraded' as const, detail: 'real channel awaits phone connection' };
-  const dependencies = [transcription, device];
+  const copilot = !config.COPILOT_ENABLED
+    ? { name: 'copilot_provider', status: 'available' as const, detail: 'conversation copilot disabled' }
+    : config.COPILOT_MODE === 'mcp'
+      ? { name: 'copilot_provider', status: 'available' as const, detail: 'MCP processing selected' }
+      : config.OPENAI_API_KEY
+        ? { name: 'copilot_provider', status: 'available' as const, detail: `${config.OPENAI_MODEL} configured` }
+        : { name: 'copilot_provider', status: 'degraded' as const, detail: 'OPENAI_API_KEY is missing; deterministic fallback active' };
+  const dependencies = [transcription, device, copilot];
   const status = dependencies.some((item) => item.status === 'unavailable')
     ? 'unavailable'
     : dependencies.some((item) => item.status === 'degraded') ? 'degraded' : 'ok';

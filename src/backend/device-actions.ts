@@ -3,6 +3,7 @@ import type { RuntimeConfig } from '../config.js';
 import type { InterventionActionResponse } from '../contracts/interventions.js';
 import type { PulseEvent } from '../contracts/events.js';
 import type { CopilotAdviceInput, CopilotAdviceResponse, CopilotRequest, PendingCopilotResponse } from '../contracts/copilot.js';
+import type { StructuredLogger } from '../observability/logger.js';
 import { EventStore, type PendingIntervention } from './event-store.js';
 
 const SAFE_SILENCE_MS = 1_500;
@@ -12,7 +13,11 @@ export class DeviceActions {
   private readonly sockets = new Set<WebSocket>();
   private readonly queueTimer: NodeJS.Timeout;
 
-  constructor(private readonly store: EventStore, private readonly config: RuntimeConfig) {
+  constructor(
+    private readonly store: EventStore,
+    private readonly config: RuntimeConfig,
+    private readonly logger: StructuredLogger
+  ) {
     this.queueTimer = setInterval(() => this.processWhisperQueue(), 250);
     this.queueTimer.unref();
   }
@@ -158,7 +163,7 @@ export class DeviceActions {
       });
       this.broadcastCopilotState(result.request);
       if (!result.duplicate && this.config.COPILOT_MODE === 'automatic') {
-        this.processCopilotRequest(result.request);
+        void this.processCopilotRequest(result.request);
       }
       return;
     }
@@ -222,36 +227,122 @@ export class DeviceActions {
     }
   }
 
-  private processCopilotRequest(request: CopilotRequest): void {
+  private async processCopilotRequest(request: CopilotRequest): Promise<void> {
     const context = this.store.getContext(request.sessionId);
-    if (!context || !this.store.hasActiveConsent(request.sessionId, 'act:audio')) {
+    if (!context || !this.store.hasActiveConsent(request.sessionId, 'read:context') ||
+      !this.store.hasActiveConsent(request.sessionId, 'read:transcript') ||
+      !this.store.hasActiveConsent(request.sessionId, 'act:audio')) {
       this.broadcastCopilotState(this.store.updateCopilotRequest(request.requestId, 'failed'));
       return;
     }
 
-    const transcript = this.store.getTranscriptSegments(request.sessionId);
+    const transcript = this.store.getTranscriptSegments(request.sessionId).slice(-20);
     const spoken = transcript.map(({ text }) => text.toLocaleLowerCase()).join(' ');
     const goalIndex = context.goals.findIndex((goal) => !spoken.includes(goal.toLocaleLowerCase()));
     const selectedGoalIndex = goalIndex >= 0 ? goalIndex : context.goals.length > 0 ? 0 : -1;
     const goal = selectedGoalIndex >= 0 ? context.goals[selectedGoalIndex] : undefined;
     const goalWords = goal?.trim().split(/\s+/u).slice(0, 18) ?? [];
-    const text = goalWords.length > 0
+    const fallback = goalWords.length > 0
       ? `Next, mention ${goalWords.join(' ')}`
       : 'Pause, listen, and ask one clear follow-up question.';
-    const evidenceId = selectedGoalIndex >= 0
-      ? `context:goal:${selectedGoalIndex}`
-      : transcript.at(-1)?.segmentId ?? 'context:situation';
+    const evidenceIds = [
+      'context:situation',
+      ...context.goals.map((_, index) => `context:goal:${index}`),
+      ...transcript.map(({ segmentId }) => segmentId)
+    ];
 
     const thinking = this.store.updateCopilotRequest(request.requestId, 'thinking');
     this.broadcastCopilotState(thinking);
-    this.copilotAdvice({
-      requestId: request.requestId,
-      text,
-      triggerEvidenceIds: [evidenceId],
-      confidentialContextDirectlyUseful: goal !== undefined,
-      expiresInMs: 15_000,
-      requestingAgentId: 'backend-copilot'
-    });
+    try {
+      const text = await this.generateOpenAiAdvice(context, transcript, fallback);
+      this.copilotAdvice({
+        requestId: request.requestId,
+        text,
+        triggerEvidenceIds: evidenceIds,
+        confidentialContextDirectlyUseful: true,
+        expiresInMs: 15_000,
+        requestingAgentId: 'backend-openai-copilot'
+      });
+    } catch (error) {
+      this.logger.error('Automatic copilot request failed', {
+        boundary: 'openai_advice',
+        requestId: request.requestId,
+        sessionId: request.sessionId,
+        error: error instanceof Error ? error.message : 'Unknown OpenAI error'
+      });
+      const current = this.store.getCopilotRequest(request.requestId);
+      if (current?.state === 'thinking') {
+        this.broadcastCopilotState(this.store.updateCopilotRequest(request.requestId, 'failed'));
+      }
+    }
+  }
+
+  private async generateOpenAiAdvice(
+    context: NonNullable<ReturnType<EventStore['getContext']>>,
+    transcript: ReturnType<EventStore['getTranscriptSegments']>,
+    fallback: string
+  ): Promise<string> {
+    if (!this.config.OPENAI_API_KEY) return fallback;
+
+    try {
+      const response = await fetch(`${this.config.OPENAI_BASE_URL.replace(/\/$/u, '')}/responses`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${this.config.OPENAI_API_KEY}`,
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: this.config.OPENAI_MODEL,
+          store: false,
+          max_output_tokens: 80,
+          instructions: 'Give one immediately actionable conversation suggestion using only the supplied evidence. Use at most 20 words. Prefer an unsaid goal. Do not reveal private context unless necessary. Return JSON only.',
+          input: JSON.stringify({
+            context: {
+              wearerSummary: context.wearerSummary,
+              situation: context.situation,
+              participants: context.participants,
+              goals: context.goals,
+              topicsToAvoid: context.topicsToAvoid
+            },
+            recentTranscript: transcript.map(({ segmentId, speaker, text }) => ({ segmentId, speaker, text }))
+          }),
+          text: {
+            format: {
+              type: 'json_schema',
+              name: 'copilot_advice',
+              strict: true,
+              schema: {
+                type: 'object',
+                properties: { advice: { type: 'string' } },
+                required: ['advice'],
+                additionalProperties: false
+              }
+            }
+          }
+        }),
+        signal: AbortSignal.timeout(10_000)
+      });
+      if (!response.ok) throw new Error(`OpenAI returned HTTP ${response.status}`);
+      const body = await response.json() as {
+        output_text?: string;
+        output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+      };
+      const output = body.output_text ?? body.output
+        ?.flatMap(({ content }) => content ?? [])
+        .find(({ type }) => type === 'output_text')?.text;
+      if (!output) throw new Error('OpenAI returned no advice');
+      const parsed = JSON.parse(output) as { advice?: unknown };
+      if (typeof parsed.advice !== 'string' || parsed.advice.trim().length === 0) {
+        throw new Error('OpenAI returned invalid advice');
+      }
+      return parsed.advice.trim().split(/\s+/u).slice(0, 20).join(' ');
+    } catch (error) {
+      this.logger.warn('OpenAI advice unavailable; using deterministic fallback', {
+        boundary: 'openai_advice',
+        error: error instanceof Error ? error.message : 'Unknown OpenAI error'
+      });
+      return fallback;
+    }
   }
 
   private requireActionableSession(scope: 'act:haptic' | 'act:audio') {
