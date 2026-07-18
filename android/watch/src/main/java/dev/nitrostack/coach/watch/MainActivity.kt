@@ -71,8 +71,7 @@ class MainActivity : ComponentActivity() {
         val bridge by WatchStateStore.state.collectAsStateWithLifecycle()
         val copilotDisabledReason = when {
             !bridge.phoneConnected -> "Copilot unavailable: connect the phone"
-            !bridge.backendConnected -> "Copilot unavailable: connect the backend"
-            bridge.sessionStatus != "active" -> "Copilot unavailable: start a session"
+            bridge.sessionStatus !in setOf("calibrating", "active") -> "Copilot unavailable: start a session"
             bridge.copilotState in setOf("requested", "thinking", "queued", "playing") -> "Copilot request in progress"
             else -> null
         }
