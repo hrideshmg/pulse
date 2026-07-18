@@ -11,7 +11,7 @@ const runtimeConfigSchema = z.object({
   AUDIO_INPUT: z.enum(['earbuds', 'phone']).default('phone'),
   TRANSCRIPTION_MODE: z.enum(['cloud', 'on_device', 'fixture']).default('fixture'),
   DEVICE_ACTIONS: z.enum(['real', 'simulated']).default('simulated'),
-  COPILOT_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
+  COPILOT_ENABLED: z.enum(['true', 'false']).default('true').transform((value) => value === 'true'),
   COPILOT_MODE: z.enum(['automatic', 'mcp']).default('automatic'),
   OPENAI_API_KEY: z.string().min(1).optional(),
   OPENAI_MODEL: z.string().min(1).default('gpt-4.1-mini'),

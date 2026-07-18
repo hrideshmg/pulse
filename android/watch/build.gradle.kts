@@ -25,7 +25,7 @@ android {
         versionName = "0.1.0"
         buildConfigField("String", "VITALS_SOURCE", "\"watch\"")
         buildConfigField("String", "DEVICE_ACTIONS", "\"simulated\"")
-        buildConfigField("Boolean", "COPILOT_ENABLED", runtimeSetting("COPILOT_ENABLED", "false"))
+        buildConfigField("Boolean", "COPILOT_ENABLED", runtimeSetting("COPILOT_ENABLED", "true"))
     }
 
     compileOptions {

@@ -176,6 +176,7 @@ class VitalPipeline(
                 .put("grantedAt", now)
                 .put("revokedAt", JSONObject.NULL)
         ))
+        if (BuildConfig.COPILOT_ENABLED) setCopilotConsent(sessionId, true, now)
         publishSessionState("active")
     }
 
@@ -183,9 +184,9 @@ class VitalPipeline(
         val sessionId = mutableState.value.sessionId ?: return
         if (mutableState.value.sessionStatus !in setOf("calibrating", "active")) return
         stopSimulator()
-        if (mutableState.value.copilotConsented) configureCopilot(false)
         highHeartRateAlertGate.reset()
         val endedAt = Instant.now().toString()
+        if (mutableState.value.copilotConsented) setCopilotConsent(sessionId, false, endedAt)
         enqueue(PulseContract.envelope(
             type = "consent_updated",
             sessionId = sessionId,
@@ -309,11 +310,7 @@ class VitalPipeline(
         return true
     }
 
-    fun configureCopilot(enabled: Boolean) {
-        if (!BuildConfig.COPILOT_ENABLED) return
-        val sessionId = mutableState.value.sessionId ?: return
-        if (mutableState.value.sessionStatus != "active") return
-        val now = Instant.now().toString()
+    private fun setCopilotConsent(sessionId: String, enabled: Boolean, now: String) {
         if (enabled) prefs.edit().putString("copilot_granted_at", now).apply()
         val grantedAt = if (enabled) now else prefs.getString("copilot_granted_at", now) ?: now
         listOf("read:transcript", "act:audio").forEach { scopeName ->

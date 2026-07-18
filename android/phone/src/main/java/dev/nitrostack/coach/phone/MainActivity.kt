@@ -86,11 +86,7 @@ class MainActivity : ComponentActivity() {
                     else "Conversation copilot: ${vitals.copilotState}",
                     style = MaterialTheme.typography.titleMedium
                 )
-                Button(
-                    onClick = { pipeline.configureCopilot(!vitals.copilotConsented) },
-                    enabled = vitals.sessionStatus == "active"
-                ) { Text(if (vitals.copilotConsented) "Disable copilot" else "Enable copilot") }
-                if (vitals.sessionStatus != "active") Text("Start a session to enable copilot.")
+                if (vitals.sessionStatus != "active") Text("Copilot starts automatically with the session.")
             }
             if (BuildConfig.VITALS_SOURCE == "simulated") Text("SIMULATED VITALS", color = MaterialTheme.colorScheme.error)
             Text("Session: ${vitals.sessionStatus} ${vitals.sessionId.orEmpty()}")
