@@ -672,14 +672,16 @@ describe('Automatic conversation copilot', () => {
       if (String(input) !== 'https://openai.test/v1/responses') return originalFetch(input, init);
       openAiCalled = true;
       assert.equal((init?.headers as Record<string, string>).authorization, 'Bearer test-openai-key');
-      const request = JSON.parse(String(init?.body)) as { model: string; store: boolean; input: string };
+      const request = JSON.parse(String(init?.body)) as { model: string; store: boolean; input: string; instructions: string };
       assert.equal(request.model, 'gpt-4.1-mini');
       assert.equal(request.store, false);
       assert.match(request.input, /We need to decide the implementation order/);
       assert.match(request.input, /wordsPerMinute/);
       assert.doesNotMatch(request.input, /wearerSummary|situation|goals/);
+      assert.match(request.instructions, /in-ear presentation copilot/);
+      assert.match(request.instructions, /Pulse connects the human body to AI/);
       return new Response(JSON.stringify({
-        output: [{ content: [{ type: 'output_text', text: '{"advice":"Ask which implementation milestone matters most next."}' }] }]
+        output: [{ content: [{ type: 'output_text', text: '{"advice":"Explain how Pulse streams heart rate during conversations."}' }] }]
       }), { status: 200, headers: { 'content-type': 'application/json' } });
     }) as typeof fetch;
 
@@ -739,7 +741,7 @@ describe('Automatic conversation copilot', () => {
     const request = automaticBackend.store.getCopilotRequest('automatic-request');
     assert.equal(openAiCalled, true);
     assert.equal(request?.state, 'completed');
-    assert.equal(request?.advice, 'Ask which implementation milestone matters most next.');
+    assert.equal(request?.advice, 'Explain how Pulse streams heart rate during conversations.');
     assert.equal(automaticBackend.store.getInterventions(sessionId).length, 1);
     const pending = await (await fetch(`${baseUrl}/v1/copilot/requests/pending`)).json() as { request: unknown };
     assert.equal(pending.request, null);

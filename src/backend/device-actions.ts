@@ -8,6 +8,23 @@ import { EventStore, type PendingIntervention } from './event-store.js';
 
 const SAFE_SILENCE_MS = 1_500;
 const COPILOT_REQUEST_TTL_MS = 30_000;
+const PRESENTATION_COPILOT_PROMPT = `You are an in-ear presentation copilot. The speaker is presenting live on stage while wearing AirPods. Your responses are spoken privately through the AirPods. Your ONLY job is to help the speaker continue naturally if they forget what to say. Never become the presenter.
+
+Rules:
+- Respond in one short sentence (5-12 words).
+- Give only the next idea, never explain.
+- Do not greet, apologize, or add filler.
+- Do not provide multiple options unless I explicitly ask.
+
+If we are presenting our Pulse Project, this is the context:
+Phone app, Pixel Watch app, and Nitro Stack MCP Server. AI understands files and calendars, but not people. Pulse connects the human body to AI.
+Explain live heart-rate and audio streaming.
+Demo: Generate Session Report -> Transcript synchronized with heart rate to identify stressful moments.
+Demo: Conversation summary and speech analysis using any LLM.
+Defense: Unlike closed smartwatches, Pulse exposes wearable data through an open MCP server for any AI agent.
+End: Pulse helps AI understand humans.
+
+Return JSON only.`;
 
 export class DeviceActions {
   private readonly sockets = new Set<WebSocket>();
@@ -244,12 +261,12 @@ export class DeviceActions {
     const stress = vitalsAllowed ? this.store.getStressSignal(request.sessionId) : undefined;
     const latestVital = vitalsAllowed ? this.store.getVitalSamples(request.sessionId).at(-1) : undefined;
     const fallback = speechMetrics.wordsPerMinute > 160
-      ? 'Slow down and make your next point concise.'
+      ? 'Slow down and make your next point concise now.'
       : speechMetrics.longestTurnMs > 30_000
-        ? 'Pause and invite the other person to respond.'
+        ? 'Pause and invite the audience to respond now.'
         : transcript.length > 0
-          ? 'Address the latest point with one clear follow-up question.'
-          : 'Listen first, then ask one clear follow-up question.';
+          ? 'Build on that point with one clear example next.'
+          : 'Explain how Pulse helps AI understand humans better.';
     const evidenceIds = [
       'speech-metrics:current',
       ...(stress ? ['stress:current'] : []),
@@ -302,8 +319,8 @@ export class DeviceActions {
         body: JSON.stringify({
           model: this.config.OPENAI_MODEL,
           store: false,
-          max_output_tokens: 80,
-          instructions: 'Give one immediately actionable conversation suggestion using only the supplied transcript and metrics. Use at most 20 words. Do not invent facts. Return JSON only.',
+          max_output_tokens: 48,
+          instructions: PRESENTATION_COPILOT_PROMPT,
           input: JSON.stringify({
             recentTranscript: transcript.map(({ segmentId, speaker, text }) => ({ segmentId, speaker, text })),
             speechMetrics: {
@@ -348,10 +365,10 @@ export class DeviceActions {
         .find(({ type }) => type === 'output_text')?.text;
       if (!output) throw new Error('OpenAI returned no advice');
       const parsed = JSON.parse(output) as { advice?: unknown };
-      if (typeof parsed.advice !== 'string' || parsed.advice.trim().length === 0) {
+      if (typeof parsed.advice !== 'string' || !isPresentationAdvice(parsed.advice)) {
         throw new Error('OpenAI returned invalid advice');
       }
-      return parsed.advice.trim().split(/\s+/u).slice(0, 20).join(' ');
+      return parsed.advice.trim();
     } catch (error) {
       this.logger.warn('OpenAI advice unavailable; using deterministic fallback', {
         boundary: 'openai_advice',
@@ -450,4 +467,9 @@ export class DeviceActions {
     const message = JSON.stringify(event);
     for (const socket of this.sockets) if (socket.readyState === socket.OPEN) socket.send(message);
   }
+}
+
+function isPresentationAdvice(advice: string): boolean {
+  const words = advice.trim().split(/\s+/u);
+  return words.length >= 5 && words.length <= 12 && /[.!?]$/u.test(advice.trim());
 }
